@@ -68,19 +68,34 @@ pub fn doctor(config: &Config) -> Result<Value> {
         .and_then(|path| fs::read_to_string(path).ok())
         .map(|token| token.trim().to_string())
         .filter(|token| !token.is_empty());
-    let ping = token
-        .as_deref()
-        .map(|token| {
-            helper_post(
-                &config.helper.endpoint,
-                json!({"op": "ping", "token": token}),
-            )
-        })
-        .transpose();
-    let (status, response, error) = match ping {
-        Ok(Some(value)) => ("available", Some(value), None),
-        Ok(None) => ("token_missing", None, None),
-        Err(err) => ("unavailable", None, Some(err.to_string())),
+    let status_probe = helper_get(&config.helper.endpoint);
+    let ping = token.as_deref().map(|token| {
+        helper_post(
+            &config.helper.endpoint,
+            json!({"op": "ping", "token": token}),
+        )
+    });
+    let (status, response, error, unauthenticated_response) = match (ping, status_probe) {
+        (Some(Ok(value)), probe) => ("available", Some(value), None, probe.ok()),
+        (Some(Err(err)), Ok(value)) => (
+            "token_invalid_or_stale",
+            None,
+            Some(err.to_string()),
+            Some(value),
+        ),
+        (Some(Err(err)), Err(probe_err)) => (
+            "unavailable",
+            None,
+            Some(format!("{}; {}", err, probe_err)),
+            None,
+        ),
+        (None, Ok(value)) => ("token_missing", None, None, Some(value)),
+        (None, Err(err)) => (
+            "not_installed_or_server_unreachable",
+            None,
+            Some(err.to_string()),
+            None,
+        ),
     };
 
     Ok(json!({
@@ -93,6 +108,7 @@ pub fn doctor(config: &Config) -> Result<Value> {
         "token_path": token_path,
         "token_present": token.is_some(),
         "installed_response": response,
+        "unauthenticated_response": unauthenticated_response,
         "error": error,
         "capabilities": [
             "ping",
@@ -328,8 +344,19 @@ fn select_profile(requested: Option<PathBuf>, profiles: &[PathBuf]) -> Result<Op
 }
 
 fn helper_post(endpoint: &str, payload: Value) -> Result<Value> {
+    helper_request(endpoint, "POST", Some(payload))
+}
+
+fn helper_get(endpoint: &str) -> Result<Value> {
+    helper_request(endpoint, "GET", None)
+}
+
+fn helper_request(endpoint: &str, method: &str, payload: Option<Value>) -> Result<Value> {
     let target = parse_http_endpoint(endpoint)?;
-    let body = serde_json::to_string(&payload)?;
+    let body = payload
+        .map(|value| serde_json::to_string(&value))
+        .transpose()?
+        .unwrap_or_default();
     let mut stream = TcpStream::connect((&*target.host, target.port)).with_context(|| {
         format!(
             "could not connect to helper endpoint {}:{}",
@@ -339,15 +366,25 @@ fn helper_post(endpoint: &str, payload: Value) -> Result<Value> {
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     stream.set_nodelay(true)?;
-    write!(
-        stream,
-        "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        target.path,
-        target.host,
-        target.port,
-        body.len(),
-        body
-    )?;
+    if method == "POST" {
+        write!(
+            stream,
+            "POST {} HTTP/1.1\r\nHost: {}:{}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            target.path,
+            target.host,
+            target.port,
+            body.len(),
+            body
+        )?;
+    } else {
+        write!(
+            stream,
+            "GET {} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+            target.path,
+            target.host,
+            target.port
+        )?;
+    }
     let mut response = String::new();
     stream.read_to_string(&mut response)?;
     parse_helper_response(&response)

@@ -225,6 +225,8 @@ zcli helper install --dry-run
 zcli helper install --execute
 ```
 
+`zcli helper doctor` probes both the unauthenticated helper status endpoint and the token-authenticated ping. `not_installed_or_server_unreachable` means the XPI is not loaded yet or Zotero's local HTTP server on `127.0.0.1:23119` is unavailable. After installing or replacing the XPI, restart Zotero, then run `zcli helper doctor --format pretty` before using `zcli write ... --execute`.
+
 Write commands:
 
 ```bash
@@ -238,7 +240,7 @@ zcli write import-files ./paper.pdf --dry-run
 zcli write trash ITEMKEY --dry-run
 ```
 
-Current helper capabilities are whitelisted: tag add/remove, collection add/remove, note creation, local file import/link, attachment rename, and Zotero trash moves. It does not expose arbitrary JavaScript, does not write SQLite directly, and defaults to dry-run previews at the CLI boundary. Installing the helper copies an XPI into the selected Zotero profile and requires a Zotero restart.
+Current helper capabilities are whitelisted: tag add/remove, collection add/remove, note creation, local file import/link, attachment rename, and Zotero trash moves. It does not expose arbitrary JavaScript, does not write SQLite directly, and defaults to dry-run previews at the CLI boundary. Installing the helper copies an XPI into the selected Zotero profile and requires a Zotero restart. If the helper installs but `doctor` still cannot connect, enable Zotero's local connector/API communication setting in Zotero preferences and restart Zotero.
 
 The helper is deliberately small and fast: startup only ensures one token file and registers one Zotero local endpoint; the token is cached in memory after startup; execute calls use compact responses by default; file existence checks happen only for attachment/file operations; and the protocol supports a batch operation so future CLI flows can submit multiple whitelisted writes in one localhost round trip.
 

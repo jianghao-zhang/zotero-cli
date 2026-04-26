@@ -4,10 +4,23 @@ var ZcliHelper = {
   protocolVersion: 1,
   notifierID: "zcli-helper",
   token: null,
+  startupError: null,
 
   async startup() {
-    this.token = await this.ensureToken();
-    this.registerEndpoint();
+    try {
+      if (Zotero.initializationPromise) {
+        await Zotero.initializationPromise;
+      }
+      this.token = await this.ensureToken();
+      this.registerEndpoint();
+      this.startupError = null;
+    } catch (error) {
+      this.startupError = error && error.message ? error.message : String(error);
+      this.log("startup failed: " + this.startupError);
+      try {
+        Zotero.logError(error);
+      } catch (_) {}
+    }
   },
 
   async shutdown() {
@@ -23,70 +36,98 @@ var ZcliHelper = {
   },
 
   tokenPath() {
-    return PathUtils.join(Zotero.DataDirectory.dir, "zcli-helper-token");
+    return this.pathUtils().join(Zotero.DataDirectory.dir, "zcli-helper-token");
+  },
+
+  pathUtils() {
+    if (typeof PathUtils !== "undefined") return PathUtils;
+    if (typeof ChromeUtils !== "undefined" && ChromeUtils.importESModule) {
+      return ChromeUtils.importESModule("resource://gre/modules/PathUtils.sys.mjs").PathUtils;
+    }
+    throw new Error("PathUtils is not available");
+  },
+
+  ioUtils() {
+    if (typeof IOUtils !== "undefined") return IOUtils;
+    if (typeof ChromeUtils !== "undefined" && ChromeUtils.importESModule) {
+      return ChromeUtils.importESModule("resource://gre/modules/IOUtils.sys.mjs").IOUtils;
+    }
+    throw new Error("IOUtils is not available");
   },
 
   async ensureToken() {
     var path = this.tokenPath();
+    var io = this.ioUtils();
     try {
-      if (await IOUtils.exists(path)) {
-        var bytes = await IOUtils.read(path);
+      if (await io.exists(path)) {
+        var bytes = await io.read(path);
         var existing = new TextDecoder().decode(bytes).trim();
         if (existing) return existing;
       }
     } catch (_) {}
     var token = this.randomToken();
-    await IOUtils.write(path, new TextEncoder().encode(token + "\n"));
+    await io.write(path, new TextEncoder().encode(token + "\n"));
     return token;
   },
 
   async readToken() {
     if (this.token) return this.token;
-    var bytes = await IOUtils.read(this.tokenPath());
+    var bytes = await this.ioUtils().read(this.tokenPath());
     this.token = new TextDecoder().decode(bytes).trim();
     return this.token;
   },
 
   randomToken() {
     var bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    return Array.from(bytes)
-      .map(function (b) {
-        return b.toString(16).padStart(2, "0");
-      })
-      .join("");
+    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes)
+        .map(function (b) {
+          return b.toString(16).padStart(2, "0");
+        })
+        .join("");
+    }
+    var uuidGenerator = Components.classes[
+      "@mozilla.org/uuid-generator;1"
+    ].getService(Components.interfaces.nsIUUIDGenerator);
+    var token = "";
+    for (var i = 0; i < 4; i++) {
+      token += uuidGenerator.generateUUID().toString().replace(/[{}-]/g, "");
+    }
+    return token;
   },
 
   registerEndpoint() {
-    var self = this;
-    class Endpoint {
-      supportedMethods = ["GET", "POST"];
-      supportedDataTypes = ["application/json"];
-
-      init = async function (options) {
-        try {
-          if (options.method === "GET") {
-            return [200, "application/json", JSON.stringify(self.publicStatus())];
-          }
-          var postData =
-            typeof options.data === "string"
-              ? options.data
-              : JSON.stringify(options.data || {});
-          var request = JSON.parse(postData);
-          var result = await self.handle(request);
-          return [200, "application/json", JSON.stringify(result)];
-        } catch (error) {
-          return [
-            500,
-            "application/json",
-            JSON.stringify({
-              ok: false,
-              error: error && error.message ? error.message : String(error),
-            }),
-          ];
-        }
-      };
+    if (!Zotero.Server || !Zotero.Server.Endpoints) {
+      throw new Error("Zotero local HTTP server is not available");
     }
+    var self = this;
+    function Endpoint() {}
+    Endpoint.prototype.supportedMethods = ["GET", "POST"];
+    Endpoint.prototype.supportedDataTypes = ["application/json"];
+    Endpoint.prototype.init = async function (options) {
+      try {
+        if (options.method === "GET") {
+          return [200, "application/json", JSON.stringify(self.publicStatus())];
+        }
+        var postData =
+          typeof options.data === "string"
+            ? options.data
+            : JSON.stringify(options.data || {});
+        var request = JSON.parse(postData);
+        var result = await self.handle(request);
+        return [200, "application/json", JSON.stringify(result)];
+      } catch (error) {
+        return [
+          500,
+          "application/json",
+          JSON.stringify({
+            ok: false,
+            error: error && error.message ? error.message : String(error),
+          }),
+        ];
+      }
+    };
     Zotero.Server.Endpoints[this.endpointPath] = Endpoint;
     this.log("registered endpoint " + this.endpointPath);
   },
@@ -99,6 +140,7 @@ var ZcliHelper = {
       protocolVersion: this.protocolVersion,
       mode: "fast",
       tokenPath: this.tokenPath(),
+      startupError: this.startupError,
       capabilities: this.capabilities(),
       performance: {
         tokenCachedInMemory: !!this.token,

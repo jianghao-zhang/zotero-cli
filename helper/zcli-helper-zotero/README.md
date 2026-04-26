@@ -9,6 +9,9 @@ cleanly.
 The endpoint is `/zcli-helper` on Zotero's local HTTP server. It accepts only
 whitelisted operations, requires the token written to `zcli-helper-token` in the
 Zotero data directory, and does not expose arbitrary JavaScript execution.
+The CLI probes the unauthenticated status endpoint first, so
+`zcli helper doctor` can distinguish a missing token from an unavailable local
+HTTP server.
 
 Fast-mode behavior:
 
@@ -33,9 +36,15 @@ Supported operation names:
 Install from `zcli`:
 
 ```sh
+zcli helper doctor --format pretty
 zcli helper install --dry-run
 zcli helper install --execute
 ```
+
+After installing or replacing the XPI, restart Zotero and run
+`zcli helper doctor --format pretty`. If it reports
+`not_installed_or_server_unreachable`, the XPI has not loaded yet or Zotero's
+local HTTP server on `127.0.0.1:23119` is unavailable.
 
 Preview writes without contacting the helper:
 
