@@ -9,6 +9,8 @@ cleanly.
 The endpoint is `/zcli-helper` on Zotero's local HTTP server. It accepts only
 whitelisted operations, requires the token written to `zcli-helper-token` in the
 Zotero data directory, and does not expose arbitrary JavaScript execution.
+Zotero 9 requires `applications.zotero.update_url` in the manifest; this helper
+ships an empty update manifest until release publishing is wired up.
 The CLI probes the unauthenticated status endpoint first, so
 `zcli helper doctor` can distinguish a missing token from an unavailable local
 HTTP server.

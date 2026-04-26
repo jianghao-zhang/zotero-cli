@@ -225,7 +225,7 @@ zcli helper install --dry-run
 zcli helper install --execute
 ```
 
-`zcli helper doctor` probes both the unauthenticated helper status endpoint and the token-authenticated ping. `not_installed_or_server_unreachable` means the XPI is not loaded yet or Zotero's local HTTP server on `127.0.0.1:23119` is unavailable. After installing or replacing the XPI, restart Zotero, then run `zcli helper doctor --format pretty` before using `zcli write ... --execute`.
+`zcli helper doctor` probes both the unauthenticated helper status endpoint and the token-authenticated ping. `not_installed_or_server_unreachable` means the XPI is not loaded yet or Zotero's local HTTP server on `127.0.0.1:23119` is unavailable. The helper manifest includes Zotero 9's required `applications.zotero.update_url`; without it, Zotero reports the local XPI as incompatible. After installing or replacing the XPI, restart Zotero, then run `zcli helper doctor --format pretty` before using `zcli write ... --execute`.
 
 Write commands:
 

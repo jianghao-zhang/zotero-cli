@@ -112,6 +112,20 @@ fn doctor_and_web_api_config_are_json_first() -> anyhow::Result<()> {
 fn helper_plugin_commands_are_dry_run_first() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
     let profile = fixture._dir.path().join("zotero-profile");
+    let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("helper")
+        .join("zcli-helper-zotero")
+        .join("manifest.json");
+    let manifest: Value = serde_json::from_slice(&std::fs::read(manifest_path)?)?;
+    assert_eq!(
+        manifest["applications"]["zotero"]["id"],
+        "zcli-helper@zotero-cli.local"
+    );
+    assert!(manifest["applications"]["zotero"]["update_url"]
+        .as_str()
+        .is_some_and(|url| url.starts_with("https://")));
+    assert!(manifest["applications"]["zotero"]["strict_max_version"].is_string());
+
     let output = fixture
         .cmd()?
         .args(["helper", "doctor"])
