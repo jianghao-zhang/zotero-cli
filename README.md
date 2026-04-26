@@ -2,6 +2,8 @@
 
 Fast local Zotero CLI. The npm package is `zotero-cli`; the installed binary is `zcli`.
 
+This is currently a personal-use draft project, not a polished public release.
+
 `zcli` is CLI-only in v1. Core commands read local Zotero data and do not require external agent runtimes, Zotero Web API credentials, an MCP server, an HTTP bridge, or the optional Zotero helper plugin.
 
 Optional ecosystem links:
@@ -452,12 +454,4 @@ Known testing notes:
 
 ## Acknowledgements
 
-`zcli` takes product and interaction inspiration from the Zotero ecosystem:
-
-| Project | Influence |
-| --- | --- |
-| [ZoFiles](https://github.com/X1AOX1A/ZoFiles) | Filesystem mirror, `Allin/` index, Markdown-oriented paper surface, and agent-friendly local file workflow. |
-| [zotero-mcp](https://github.com/54yyyu/zotero-mcp) | High-value agent operations, local/API boundary tradeoffs, and compact tool-friendly outputs. |
-| [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) | Optional LLM recap, Claude runtime metadata, and paper Markdown reuse path. |
-
-`zcli` benefited from studying their work.
+`zcli` takes substantial product and interaction inspiration from the Zotero ecosystem. [ZoFiles](https://github.com/X1AOX1A/ZoFiles) shaped the filesystem mirror, `Allin/` index, Markdown-oriented paper surface, and agent-friendly local file workflow. [zotero-mcp](https://github.com/54yyyu/zotero-mcp) helped clarify high-value agent operations, local/API boundary tradeoffs, and the importance of compact, tool-friendly outputs. [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) shaped the optional LLM recap and paper Markdown reuse path. `zcli` benefited from studying their work.
