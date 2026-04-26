@@ -72,6 +72,14 @@ Create or manage official Zotero API keys here:
 https://www.zotero.org/settings/keys
 ```
 
+`--library-id` is Zotero's numeric Web API ID. It is not your username, email, library name, or the local SQLite `libraryID`.
+
+For a personal library, use `--library-type user` and the `Your userID for use in API calls` number shown on the API Keys page. For a group library, use `--library-type group` and the numeric groupID from the group URL/settings link, or retrieve group IDs from `/users/<userID>/groups`. Zotero documents the URL shape as `/users/<userID>` and `/groups/<groupID>`:
+
+```text
+https://www.zotero.org/support/dev/web_api/v3/basics#user_and_group_library_urls
+```
+
 Use an environment variable for the key:
 
 ```bash

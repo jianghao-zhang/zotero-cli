@@ -137,6 +137,9 @@ fn print_doctor(value: &Value) -> bool {
         if let Some(url) = web_api.get("api_key_url").and_then(Value::as_str) {
             println!("  get key: {url}");
         }
+        if let Some(url) = web_api.get("library_id_help_url").and_then(Value::as_str) {
+            println!("  find library id: {url}");
+        }
         println!("  core commands use network: no");
         println!();
     }

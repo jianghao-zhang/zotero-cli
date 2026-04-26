@@ -13,7 +13,9 @@ use serde_json::{json, Value};
 use crate::{
     config::{Config, WebApiConfig},
     date_range::DateRange,
-    helper::{self, HelperInstallOptions, HelperPackageOptions, API_KEY_URL},
+    helper::{
+        self, HelperInstallOptions, HelperPackageOptions, API_KEY_URL, API_LIBRARY_ID_HELP_URL,
+    },
     lfz,
     mirror::{self, MirrorMode, MirrorOptions},
     output::OutputFormat,
@@ -160,7 +162,10 @@ pub struct WebApiArgs {
     pub disable: bool,
     #[arg(long, value_enum)]
     pub library_type: Option<WebApiLibraryType>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Numeric Zotero userID/groupID for Web API calls, not username or library name"
+    )]
     pub library_id: Option<String>,
     #[arg(long)]
     pub base_url: Option<String>,
@@ -2065,6 +2070,7 @@ fn web_api_status(config: &WebApiConfig) -> Value {
         "base_url": config.base_url,
         "library_type": config.library_type,
         "library_id": config.library_id,
+        "library_id_help_url": API_LIBRARY_ID_HELP_URL,
         "api_key_url": API_KEY_URL,
         "api_key_env": config.api_key_env,
         "api_key_present": config.api_key.as_deref().map(|s| !s.is_empty()).unwrap_or(false) || env_key_present,

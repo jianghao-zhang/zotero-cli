@@ -92,6 +92,10 @@ fn doctor_and_web_api_config_are_json_first() -> anyhow::Result<()> {
         value["web_api"]["api_key_url"],
         "https://www.zotero.org/settings/keys"
     );
+    assert_eq!(
+        value["web_api"]["library_id_help_url"],
+        "https://www.zotero.org/support/dev/web_api/v3/basics#user_and_group_library_urls"
+    );
     assert_eq!(value["web_api"]["stored_api_key"], Value::Null);
 
     let output = fixture
@@ -510,6 +514,10 @@ fn setup_defaults_dry_run_is_non_interactive() -> anyhow::Result<()> {
         fixture.db.display().to_string()
     );
     assert_eq!(value["config"]["web_api"]["api_key_env"], "ZOTERO_API_KEY");
+    assert_eq!(
+        value["config"]["web_api"]["library_id_help_url"],
+        "https://www.zotero.org/support/dev/web_api/v3/basics#user_and_group_library_urls"
+    );
     Ok(())
 }
 
@@ -561,6 +569,10 @@ fn config_commands_init_status_and_store_web_api_key() -> anyhow::Result<()> {
         .clone();
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["config"]["web_api"]["stored_api_key"], "<redacted>");
+    assert_eq!(
+        value["config"]["web_api"]["library_id_help_url"],
+        "https://www.zotero.org/support/dev/web_api/v3/basics#user_and_group_library_urls"
+    );
     Ok(())
 }
 

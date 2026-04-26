@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use crate::{
     cli::{Context, SetupArgs},
     config::Config,
-    helper::API_KEY_URL,
+    helper::{API_KEY_URL, API_LIBRARY_ID_HELP_URL},
     skill::{self, SkillInstallOptions, SkillTarget},
 };
 
@@ -124,6 +124,12 @@ impl<'a> SetupWizard<'a> {
         write_line(&format!(
             "Create or manage Zotero API keys here: {API_KEY_URL}"
         ))?;
+        write_line("Library ID means Zotero's numeric API id, not your username, email, library name, or local SQLite libraryID.")?;
+        write_line("For a personal library, use library type `user` and the `Your userID for use in API calls` number shown on the API Keys page.")?;
+        write_line("For a group library, use library type `group` and the numeric groupID from the group URL/settings link, or retrieve group IDs from `/users/<userID>/groups`.")?;
+        write_line(&format!(
+            "Official library ID docs: {API_LIBRARY_ID_HELP_URL}"
+        ))?;
         write_line("Using an env var such as ZOTERO_API_KEY is preferred; stored keys are redacted in output but still live in config.toml.")?;
         let configure = prompt_bool(
             "Configure optional Zotero Web API?",
@@ -144,7 +150,12 @@ impl<'a> SetupWizard<'a> {
         };
         self.config.web_api.library_type = library_type.to_string();
 
-        let library_id = prompt_string("Library ID", self.config.web_api.library_id.as_deref())?;
+        let id_label = if library_type == "group" {
+            "Library ID (numeric groupID)"
+        } else {
+            "Library ID (numeric userID)"
+        };
+        let library_id = prompt_string(id_label, self.config.web_api.library_id.as_deref())?;
         self.config.web_api.library_id = empty_to_none(library_id);
 
         let base_url = prompt_string("Base URL", Some(self.config.web_api.base_url.as_str()))?;
@@ -383,6 +394,7 @@ fn redacted_config(config: &Config) -> Value {
             "base_url": config.web_api.base_url,
             "library_type": config.web_api.library_type,
             "library_id": config.web_api.library_id,
+            "library_id_help_url": API_LIBRARY_ID_HELP_URL,
             "api_key_url": API_KEY_URL,
             "api_key_env": config.web_api.api_key_env,
             "stored_api_key": config.web_api.api_key.as_ref().map(|_| "<redacted>"),

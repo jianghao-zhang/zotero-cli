@@ -14,6 +14,8 @@ use crate::{config::Config, paths};
 
 pub const HELPER_ID: &str = "zcli-helper@zotero-cli.local";
 pub const API_KEY_URL: &str = "https://www.zotero.org/settings/keys";
+pub const API_LIBRARY_ID_HELP_URL: &str =
+    "https://www.zotero.org/support/dev/web_api/v3/basics#user_and_group_library_urls";
 
 #[derive(Debug)]
 pub struct HelperInstallOptions {
