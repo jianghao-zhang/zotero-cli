@@ -1,6 +1,6 @@
 use std::{
-    fs,
-    io::{self, Write},
+    env, fs,
+    io::{self, IsTerminal, Write},
     path::PathBuf,
 };
 
@@ -28,6 +28,7 @@ struct SetupWizard<'a> {
     context: &'a Context,
     args: &'a SetupArgs,
     config: Config,
+    overwrite_existing: bool,
     skill_targets: Vec<SkillTarget>,
     notes: Vec<String>,
 }
@@ -38,6 +39,7 @@ impl<'a> SetupWizard<'a> {
             context,
             args,
             config: context.config.clone(),
+            overwrite_existing: args.force,
             skill_targets: Vec::new(),
             notes: Vec::new(),
         }
@@ -62,8 +64,9 @@ impl<'a> SetupWizard<'a> {
     }
 
     fn prompt_all(&mut self) -> Result<()> {
-        write_line("zcli setup")?;
+        write_title("zcli setup")?;
         write_line("This writes local zcli config only. It does not contact Zotero Web API, import papers, or mutate your Zotero library.")?;
+        self.prompt_existing_config()?;
         write_line("Press Enter to accept a detected/default value.")?;
 
         self.prompt_zotero_paths()?;
@@ -73,6 +76,30 @@ impl<'a> SetupWizard<'a> {
         if !self.args.no_skills {
             self.prompt_skills()?;
         }
+        Ok(())
+    }
+
+    fn prompt_existing_config(&mut self) -> Result<()> {
+        if self.args.dry_run || self.args.force || !self.context.config_path.exists() {
+            return Ok(());
+        }
+        write_line(&format!(
+            "Existing config found: {}",
+            self.context.config_path.display()
+        ))?;
+        write_line(
+            "This setup run will update that local config file only if you approve overwrite here.",
+        )?;
+        let overwrite = prompt_bool("Overwrite existing config when setup finishes?", false)?;
+        if !overwrite {
+            return Err(anyhow!(
+                "config already exists: {}; rerun with --force or answer yes to overwrite",
+                self.context.config_path.display()
+            ));
+        }
+        self.overwrite_existing = true;
+        self.notes
+            .push("user approved overwriting existing config".to_string());
         Ok(())
     }
 
@@ -261,7 +288,7 @@ impl<'a> SetupWizard<'a> {
 
     fn finish(self) -> Result<Value> {
         let config_exists = self.context.config_path.exists();
-        if config_exists && !self.args.force && !self.args.dry_run {
+        if config_exists && !self.args.force && !self.args.dry_run && !self.overwrite_existing {
             return Err(anyhow!(
                 "config already exists: {}; pass --force to overwrite",
                 self.context.config_path.display()
@@ -332,9 +359,42 @@ fn prompt_bool(label: &str, default: bool) -> Result<bool> {
 
 fn prompt_string(label: &str, default: Option<&str>) -> Result<String> {
     let mut stderr = io::stderr();
-    match default {
-        Some(default) if !default.is_empty() => write!(stderr, "{label} [{default}]: ")?,
-        _ => write!(stderr, "{label}: ")?,
+    if is_human_terminal() {
+        let width = terminal_width();
+        match default {
+            Some(default) if !default.is_empty() => {
+                let inline_len = label.chars().count() + default.chars().count() + 5;
+                if inline_len > width.saturating_sub(2) {
+                    writeln!(
+                        stderr,
+                        "{} {}",
+                        style_text("?", AnsiStyle::Accent),
+                        style_text(label, AnsiStyle::Prompt)
+                    )?;
+                    write_wrapped(&format!("default: {default}"), AnsiStyle::Muted, 2)?;
+                    write!(stderr, "{} ", style_text(">", AnsiStyle::Accent))?;
+                } else {
+                    write!(
+                        stderr,
+                        "{} {} {} ",
+                        style_text("?", AnsiStyle::Accent),
+                        style_text(label, AnsiStyle::Prompt),
+                        style_text(&format!("[{default}]:"), AnsiStyle::Muted)
+                    )?;
+                }
+            }
+            _ => write!(
+                stderr,
+                "{} {} ",
+                style_text("?", AnsiStyle::Accent),
+                style_text(&format!("{label}:"), AnsiStyle::Prompt)
+            )?,
+        }
+    } else {
+        match default {
+            Some(default) if !default.is_empty() => write!(stderr, "{label} [{default}]: ")?,
+            _ => write!(stderr, "{label}: ")?,
+        }
     }
     stderr.flush()?;
     let mut value = String::new();
@@ -350,15 +410,98 @@ fn prompt_string(label: &str, default: Option<&str>) -> Result<String> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum AnsiStyle {
+    Accent,
+    Heading,
+    Muted,
+    Prompt,
+}
+
+fn write_title(message: &str) -> Result<()> {
+    writeln!(io::stderr(), "{}", style_text(message, AnsiStyle::Heading))?;
+    Ok(())
+}
+
 fn write_line(message: &str) -> Result<()> {
-    writeln!(io::stderr(), "{message}")?;
+    write_wrapped(message, AnsiStyle::Muted, 2)
+}
+
+fn write_wrapped(message: &str, style: AnsiStyle, indent: usize) -> Result<()> {
+    let width = terminal_width();
+    let indent_text = " ".repeat(indent);
+    for line in wrap_text(message, width.saturating_sub(indent).max(40)) {
+        writeln!(io::stderr(), "{indent_text}{}", style_text(&line, style))?;
+    }
     Ok(())
 }
 
 fn write_section(title: &str) -> Result<()> {
     writeln!(io::stderr())?;
-    writeln!(io::stderr(), "{title}")?;
+    writeln!(io::stderr(), "{}", style_text(title, AnsiStyle::Heading))?;
     Ok(())
+}
+
+fn wrap_text(message: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for raw in message.lines() {
+        let mut line = String::new();
+        for word in raw.split_whitespace() {
+            let word_len = word.chars().count();
+            let line_len = line.chars().count();
+            if line_len == 0 {
+                line.push_str(word);
+            } else if line_len + 1 + word_len <= width {
+                line.push(' ');
+                line.push_str(word);
+            } else {
+                lines.push(line);
+                line = word.to_string();
+            }
+        }
+        if line.is_empty() {
+            lines.push(String::new());
+        } else {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+fn terminal_width() -> usize {
+    env::var("COLUMNS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|width| (60..=160).contains(width))
+        .unwrap_or(88)
+}
+
+fn style_text(message: &str, style: AnsiStyle) -> String {
+    if !should_color() {
+        return message.to_string();
+    }
+    let code = match style {
+        AnsiStyle::Accent => "36",
+        AnsiStyle::Heading => "1;36",
+        AnsiStyle::Muted => "2",
+        AnsiStyle::Prompt => "1",
+    };
+    format!("\x1b[{code}m{message}\x1b[0m")
+}
+
+fn should_color() -> bool {
+    is_human_terminal()
+        && env::var_os("NO_COLOR").is_none()
+        && env::var("CLICOLOR")
+            .map(|value| value != "0")
+            .unwrap_or(true)
+        && env::var("TERM")
+            .map(|value| value != "dumb")
+            .unwrap_or(true)
+}
+
+fn is_human_terminal() -> bool {
+    io::stderr().is_terminal()
 }
 
 fn empty_to_none(value: String) -> Option<String> {

@@ -979,7 +979,8 @@ fn text_meta(value: &str, max_chars: usize, full_text: bool) -> Value {
         "text": if full_text { Value::String(normalized) } else { Value::Null },
         "chars": chars,
         "excerpt_chars": excerpt_chars,
-        "truncated": chars > excerpt_chars,
+        "truncated": !full_text && chars > excerpt_chars,
+        "excerpt_truncated": chars > excerpt_chars,
     })
 }
 
@@ -996,5 +997,24 @@ fn excerpt_normalized(value: &str, max_chars: usize) -> String {
         value.to_string()
     } else {
         value.chars().take(max_chars).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::text_meta;
+
+    #[test]
+    fn text_meta_marks_full_text_as_not_truncated() {
+        let value = "abcdef";
+        let compact = text_meta(value, 3, false);
+        assert_eq!(compact["truncated"], true);
+        assert_eq!(compact["excerpt_truncated"], true);
+        assert_eq!(compact["text"], serde_json::Value::Null);
+
+        let full = text_meta(value, 3, true);
+        assert_eq!(full["truncated"], false);
+        assert_eq!(full["excerpt_truncated"], true);
+        assert_eq!(full["text"], value);
     }
 }

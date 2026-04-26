@@ -140,7 +140,10 @@ pub struct ContextPackArgs {
     pub key: String,
     #[arg(long, default_value = "40k")]
     pub budget: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Request llm-for-zotero context when it is enabled in config"
+    )]
     pub include_lfz: bool,
 }
 
@@ -499,7 +502,7 @@ pub struct RecapReadingArgs {
     pub to: Option<String>,
     #[arg(
         long,
-        help = "Force optional llm-for-zotero recap even if it is not enabled in config"
+        help = "Request optional llm-for-zotero recap when it is enabled in config"
     )]
     pub include_lfz: bool,
     #[arg(
@@ -856,7 +859,7 @@ fn dispatch_context_pack(context: &Context, args: &ContextPackArgs) -> Result<Va
         "notes": db.notes_for_item(detail.summary.id)?,
         "annotations": db.annotations_for_item(detail.summary.id)?,
     });
-    if args.include_lfz || context.config.lfz.enabled.unwrap_or(false) {
+    if context.config.lfz.enabled.unwrap_or(false) {
         let range = DateRange::parse(Some("1970-01-01"), Some("2100-01-01"))?;
         value["lfz"] = lfz::recap(
             &context.config,
@@ -1443,12 +1446,12 @@ fn dispatch_reading_recap(
     context: &Context,
     range: &DateRange,
     item_key: Option<&str>,
-    force_lfz: bool,
+    request_lfz: bool,
     no_lfz: bool,
     why: bool,
     kind: &str,
 ) -> Result<Value> {
-    if force_lfz && no_lfz {
+    if request_lfz && no_lfz {
         anyhow::bail!("--include-lfz and --no-lfz cannot be used together");
     }
     let db = ZoteroDb::open(&context.config)?;
@@ -1470,7 +1473,7 @@ fn dispatch_reading_recap(
         json!(reading)
     };
     let lfz_enabled = context.config.lfz.enabled.unwrap_or(false);
-    let include_lfz = (lfz_enabled || force_lfz) && !no_lfz;
+    let include_lfz = lfz_enabled && !no_lfz;
     let mut value = json!({
         "ok": true,
         "kind": kind,
@@ -1482,9 +1485,14 @@ fn dispatch_reading_recap(
         "entries": entries,
         "lfz_policy": {
             "enabled_in_config": lfz_enabled,
-            "forced_by_flag": force_lfz,
+            "requested_by_flag": request_lfz,
             "disabled_by_flag": no_lfz,
             "included": include_lfz,
+            "unavailable_reason": if request_lfz && !lfz_enabled {
+                Some("lfz_not_enabled_in_config")
+            } else {
+                None
+            },
         },
     });
     if why {

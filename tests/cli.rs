@@ -522,6 +522,44 @@ fn setup_defaults_dry_run_is_non_interactive() -> anyhow::Result<()> {
 }
 
 #[test]
+fn setup_existing_config_prompts_before_long_wizard() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    fixture.cmd()?.args(["config", "init"]).assert().success();
+
+    let output = fixture
+        .cmd()?
+        .args(["setup"])
+        .write_stdin("n\n")
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("Existing config found:"));
+    assert!(stderr.contains("Overwrite existing config when setup finishes?"));
+    assert!(!stderr.contains("Local Zotero library"));
+    assert!(stderr.contains("answer yes to overwrite"));
+
+    let output = fixture
+        .cmd()?
+        .args(["setup", "--no-skills"])
+        .write_stdin("y\n\n\nn\nn\nn\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["wrote_config"], true);
+    assert!(value["notes"][0]
+        .as_str()
+        .unwrap()
+        .contains("approved overwriting"));
+    Ok(())
+}
+
+#[test]
 fn config_commands_init_status_and_store_web_api_key() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
     let output = fixture
@@ -696,6 +734,7 @@ claude_runtime_dir = "/tmp/lfz"
         .clone();
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["lfz_policy"]["enabled_in_config"], true);
+    assert_eq!(value["lfz_policy"]["requested_by_flag"], false);
     assert_eq!(value["lfz_policy"]["included"], true);
     assert_eq!(value["lfz"]["status"], "available");
 
@@ -738,7 +777,13 @@ claude_runtime_dir = "/tmp/lfz"
         .clone();
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["kind"], "reading");
-    assert_eq!(value["lfz"]["status"], "available");
+    assert_eq!(value["lfz_policy"]["requested_by_flag"], true);
+    assert_eq!(value["lfz_policy"]["included"], false);
+    assert_eq!(
+        value["lfz_policy"]["unavailable_reason"],
+        "lfz_not_enabled_in_config"
+    );
+    assert!(value.get("lfz").is_none());
 
     let output = fixture
         .cmd()?
