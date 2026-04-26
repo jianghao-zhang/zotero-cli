@@ -9,8 +9,8 @@ const { exeSuffix, nativeBinaryName, packageRoot } = require("../lib/platform");
 function candidateBinaries(root) {
   const explicit = process.env.ZCLI_BINARY ? [process.env.ZCLI_BINARY] : [];
   return explicit.concat([
-    path.join(root, "npm", "native", nativeBinaryName()),
     path.join(root, "target", "release", `zcli${exeSuffix()}`),
+    path.join(root, "npm", "native", nativeBinaryName()),
     path.join(root, "target", "debug", `zcli${exeSuffix()}`),
   ]);
 }
