@@ -180,7 +180,7 @@ Output defaults to `auto`: human-readable text in an interactive terminal, compa
 
 ## Recaps
 
-`zcli recap reading` is for normal Zotero users. It returns date-range paper activity with metadata: title, authors, year, DOI/arXiv/url, collections, tags, attachments, annotation/note counts, timestamp, and provenance. If `llm-for-zotero` support is enabled in config, it also attaches the matching compact lfz recap; use `--no-lfz` for a pure reading recap, or `--include-lfz` to force lfz recap for one call even when config does not enable it.
+`zcli recap reading` is for normal Zotero users. It returns date-range paper activity with metadata: title, authors, year, DOI/arXiv/url, collections, tags, attachments, annotation/note counts, timestamp, and provenance. If `llm-for-zotero` support is enabled in config, it also attaches the matching compact lfz recap; use `--no-lfz` for a pure reading recap. `--include-lfz` records an explicit request, but still follows local config. If `llm-for-zotero` is not enabled, the recap remains core-only and reports that lfz is not enabled in config.
 
 Provenance is explicit:
 
@@ -325,6 +325,23 @@ OpenClaw: ~/.openclaw/skills/zotero-cli
 ```
 
 On macOS/Linux the installer prefers symlinks. Use `--copy` for a copied install. OpenClaw is detected before install; it is not required for normal use.
+
+## TODO / Roadmap
+
+The current local CLI path is usable, but these pieces still need work before treating v1 as broadly release-ready:
+
+- Web API smoke and remote mode: add a `zcli web-api doctor` or `zcli web-api ping` command that validates auth, library ID, permissions, and read access against Zotero's official API. Current Web API support is configuration-only; core commands still do not use the network.
+- Inbox/import pipeline: implement `zcli inbox fetch` as the external "papers to read" entry point, with source adapters, duplicate detection, dry-run previews, and explicit execution for imports.
+- Mirror watch hardening: run long-duration `zcli mirror watch` tests, validate CPU and I/O over hours or days, and polish launchd/daemon installation. Current actual write testing covered small rebuilds; full-library sync has been dry-run tested.
+- Helper execute coverage: expand real helper tests beyond tag add/remove to notes, collections, local file import/link, attachment rename, batch operations, and trash safety. Add clearer diagnostics for sandboxed agents that cannot reach Zotero localhost even when the helper is available in a normal shell.
+- Cross-environment installs: test npm package and helper XPI on fresh Zotero 7/8/9 profiles, macOS Intel/ARM, and Linux; verify fallback Cargo builds when no prebuilt native binary is present.
+- Agent skill installs: verify actual symlink/copy installs for Codex, Claude Code, Hermes, llm-for-zotero runtime, and OpenClaw, not only dry-run path detection.
+- Test matrix: keep adding golden JSON tests for all public commands, fixture SQLite coverage for metadata/annotations/notes/attachments/collections, helper edge-case tests, and package smoke tests for npm release artifacts.
+
+Known testing notes:
+
+- `zcli helper doctor` can report unavailable inside sandboxed agent runtimes unless localhost access is allowed; run it from a normal terminal or with localhost permission when validating the helper.
+- Any real helper `--execute` write can update Zotero item modified timestamps even if the visible tag/note state is later restored.
 
 ## Safety Boundary
 
