@@ -1,0 +1,14 @@
+{
+  "manifest_version": 2,
+  "name": "zcli Helper for Zotero",
+  "version": "0.1.0",
+  "description": "Optional local Zotero runtime bridge for zcli dry-run-first mutations.",
+  "author": "zotero-cli contributors",
+  "applications": {
+    "zotero": {
+      "id": "zcli-helper@zotero-cli.local",
+      "strict_min_version": "6.999",
+      "strict_max_version": "9999.*"
+    }
+  }
+}

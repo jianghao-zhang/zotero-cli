@@ -1,0 +1,40 @@
+{
+  "name": "zotero-cli",
+  "version": "0.1.0",
+  "description": "Fast local Zotero CLI for humans and agents",
+  "license": "MIT",
+  "bin": {
+    "zcli": "./npm/bin/zcli.js",
+    "zotero-cli": "./npm/bin/zcli.js"
+  },
+  "files": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "LICENSE",
+    "README.md",
+    "helper/",
+    "npm/bin/",
+    "npm/lib/",
+    "npm/native/",
+    "npm/scripts/",
+    "skills/",
+    "src/"
+  ],
+  "scripts": {
+    "package-native": "node npm/scripts/package-native.js",
+    "prepack": "cargo build --release --bin zcli && node npm/scripts/package-native.js",
+    "postinstall": "node npm/scripts/postinstall.js",
+    "test": "cargo test && node npm/tests/smoke.js && node npm/tests/helper-fast.js",
+    "pack:dry-run": "npm pack --dry-run --json"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "keywords": [
+    "zotero",
+    "cli",
+    "rust",
+    "agent",
+    "llm"
+  ]
+}
