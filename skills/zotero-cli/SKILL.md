@@ -1,6 +1,11 @@
+---
+name: zotero-cli
+description: Use when an external agent needs portable Zotero library access through zcli for search, metadata, paper Markdown, notes, annotations, reading recaps, optional llm-for-zotero recaps, or dry-run-first Zotero writes. Applies to Codex, Claude Code, Hermes, OpenClaw, and other agents.
+---
+
 # Zotero CLI
 
-Use this skill when working with a user's Zotero library through `zcli`.
+Use this skill when working with a user's Zotero library through `zcli` from a normal external-agent runtime.
 
 ## Rules
 
@@ -13,9 +18,12 @@ Use this skill when working with a user's Zotero library through `zcli`.
 - Do not assume `llm-for-zotero` exists. Use `zcli lfz doctor` before `zcli recap lfz`.
 - When the user gives a title, DOI, arXiv ID, URL, or file path instead of a Zotero key, call `zcli resolve QUERY --format json` first.
 - Prefer `zcli paper ITEMKEY --format json` for a one-paper work surface, and `zcli context ITEMKEY --budget 40k --format json` when preparing agent context.
-- Use `zcli recap reading` for reading activity and metadata. It automatically includes compact llm-for-zotero context when the user enabled lfz in zcli config; pass `--no-lfz` when the user asks for pure reading metadata only. Use `zcli recap lfz` when the user specifically wants llm-for-zotero or Claude Code runtime conversation context.
+- For "what did I read recently" or broad date-range recaps, use `zcli recap reading --from DATE --to DATE --format json` first. Treat llm-for-zotero as a bounded overlay, not the primary source.
+- `zcli recap reading` automatically includes compact llm-for-zotero hints when the user enabled lfz in zcli config; pass `--no-lfz` when the user asks for pure reading metadata only.
+- Use `zcli recap lfz --limit 8 --format json` only when the user specifically asks what they discussed with llm-for-zotero or Claude Code. Add `--item ITEMKEY` whenever the prompt names one paper.
 - Use `zcli item markdown ITEMKEY --format json` when an agent needs a Markdown paper surface. If llm-for-zotero is configured, zcli prefers MinerU `full.md` caches keyed by PDF attachment item id; otherwise it falls back to metadata, notes, annotations, and extracted text.
-- Treat `zcli recap lfz` excerpts as summaries unless `text_full_included` is true. Check `text_truncated`, `text_chars`, and `text_excerpt_chars`.
+- Treat `zcli recap lfz` as a compact index unless `text_policy` says full text was requested. Check `text_policy`, `expand_policy`, `paper_groups`, `text_truncated`, `text_chars`, and `text_excerpt_chars`.
+- Do not use `--details`, `--full-text`, or `--include-contexts` for broad recap prompts. Use those only after the user asks for a specific full turn or context payload.
 - Do not ask for Claude/runtime trace or event payloads. `zcli` exposes event counts only.
 - To expand one specific llm-for-zotero question, use the recap row's `turn_command` or call `zcli lfz turn MESSAGE_REF --format json`. This returns the full question, matching answer, and agent final without trace payloads.
 
@@ -38,8 +46,8 @@ zcli recent --days 7 --format json
 zcli recap reading --from 2026-04-01 --to 2026-04-25 --format json
 zcli lfz doctor --format json
 zcli lfz turns --item ITEMKEY --format json
-zcli recap lfz --from today --to today --format json
-zcli recap lfz --item ITEMKEY --from today --to today --format json
+zcli recap lfz --from today --to today --limit 8 --format json
+zcli recap lfz --item ITEMKEY --from today --to today --limit 8 --format json
 zcli lfz turn claude:123 --format json
 zcli write tags ITEMKEY --add review --dry-run --format json
 zcli write note ITEMKEY --content "reading note" --dry-run --format json
@@ -57,4 +65,4 @@ For paper identity, prefer `key`, `title`, `authors`, `year`, `doi`, `arxiv`, an
 
 For recap provenance, preserve the exact `provenance` value. `metadata_modified` is only a fallback touched-paper signal, not definite reading.
 
-For llm-for-zotero recaps, follow `message_ref` / `turn_command` instead of asking for large `--full-text` output when only one turn is needed.
+For llm-for-zotero recaps, read `paper_groups` first for the topic map. Follow `message_ref` / `turn_command` instead of asking for large `--full-text` output when only one turn is needed.

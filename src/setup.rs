@@ -232,6 +232,7 @@ impl<'a> SetupWizard<'a> {
     fn prompt_lfz(&mut self) -> Result<()> {
         write_section("llm-for-zotero integration")?;
         write_line("Optional. Enable this if you use llm-for-zotero and want `zcli recap reading` and `zcli recap lfz` to include LLM chats, Claude Code runtime metadata, final answers, and event counts.")?;
+        write_line("For Claude Code mode, llm-for-zotero uses profile-specific runtime roots such as `<Zotero data>/agent-runtime/profile-*/.claude/skills/`. zcli can detect those during skill install.")?;
         write_line("Skip it if you only want normal Zotero CLI/search/reading recap behavior.")?;
         let runtime_exists = self
             .config
@@ -257,6 +258,7 @@ impl<'a> SetupWizard<'a> {
     fn prompt_skills(&mut self) -> Result<()> {
         write_section("Agent skill")?;
         write_line("Optional. This installs a small SKILL.md so Codex, Claude Code, Hermes, llm-for-zotero runtime, or OpenClaw know to call `zcli` directly.")?;
+        write_line("The `lfz` target uses a llm-for-zotero-specific skill and installs it into detected Zotero profile runtime folders.")?;
         write_line("It is not required for humans using the CLI. You can install later with `zcli skill install --target <agent> --dry-run`.")?;
         let install = prompt_bool("Install optional agent skill now?", false)?;
         if !install {
@@ -297,11 +299,14 @@ impl<'a> SetupWizard<'a> {
 
         let mut skill_results = Vec::new();
         for target in self.skill_targets {
-            skill_results.push(skill::install(SkillInstallOptions {
-                target,
-                dry_run: self.args.dry_run,
-                copy: false,
-            })?);
+            skill_results.push(skill::install(
+                SkillInstallOptions {
+                    target,
+                    dry_run: self.args.dry_run,
+                    copy: false,
+                },
+                &self.config,
+            )?);
         }
 
         if !self.args.dry_run {

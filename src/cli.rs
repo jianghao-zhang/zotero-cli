@@ -732,7 +732,7 @@ pub fn dispatch(cli: &Cli, context: &Context) -> Result<Value> {
         Commands::Queue { command } => dispatch_queue(context, command),
         Commands::Todo { command } => dispatch_queue(context, command),
         Commands::Export { command } => dispatch_export(context, command),
-        Commands::Skill { command } => dispatch_skill(command),
+        Commands::Skill { command } => dispatch_skill(context, command),
         Commands::Helper { command } => dispatch_helper(context, command),
     }
 }
@@ -1506,7 +1506,7 @@ fn dispatch_reading_recap(
             lfz::RecapOptions {
                 item_id,
                 compact: true,
-                limit: 20,
+                limit: 8,
                 full_text: false,
                 include_contexts: false,
             },
@@ -1616,14 +1616,17 @@ fn dispatch_inbox(command: &InboxCommands) -> Result<Value> {
     }
 }
 
-fn dispatch_skill(command: &SkillCommands) -> Result<Value> {
+fn dispatch_skill(context: &Context, command: &SkillCommands) -> Result<Value> {
     match command {
-        SkillCommands::Doctor => skill::doctor(),
-        SkillCommands::Install(args) => skill::install(SkillInstallOptions {
-            target: args.target,
-            dry_run: args.dry_run,
-            copy: args.copy,
-        }),
+        SkillCommands::Doctor => skill::doctor(&context.config),
+        SkillCommands::Install(args) => skill::install(
+            SkillInstallOptions {
+                target: args.target,
+                dry_run: args.dry_run,
+                copy: args.copy,
+            },
+            &context.config,
+        ),
     }
 }
 

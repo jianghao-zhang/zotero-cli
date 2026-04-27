@@ -346,9 +346,33 @@ fn recap_reading_and_lfz_keep_separate_boundaries() -> anyhow::Result<()> {
     assert_eq!(value["kind"], "lfz");
     assert_eq!(value["lfz"]["status"], "available");
     assert_eq!(value["lfz"]["compact"], true);
+    assert_eq!(value["lfz"]["text_policy"], "compact_index");
+    assert_eq!(
+        value["lfz"]["expand_policy"],
+        "use_turn_command_or_expand_command_for_one_specific_full_question_and_final_answer"
+    );
+    assert_eq!(
+        value["lfz"]["paper_groups"][0]["group_key"],
+        "item:ITEM0001"
+    );
+    assert_eq!(
+        value["lfz"]["paper_groups"][0]["expand_commands"][0],
+        "zcli lfz turn claude:1"
+    );
     assert_eq!(
         value["lfz"]["questions"][0]["conversation_system"],
         "claude_code"
+    );
+    assert_eq!(
+        value["lfz"]["questions"][0]["expand_command"],
+        "zcli lfz turn claude:1"
+    );
+    assert_eq!(value["lfz"]["questions"][0]["full_text_available"], true);
+    assert!(
+        value["lfz"]["questions"][0]["text_estimated_tokens"]
+            .as_u64()
+            .unwrap()
+            > 0
     );
 
     let output = fixture
@@ -416,6 +440,54 @@ fn skill_install_dry_run_reports_target_path() -> anyhow::Result<()> {
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["target"], "codex");
     assert!(value["target_path"].as_str().unwrap().contains(".codex"));
+    Ok(())
+}
+
+#[test]
+fn lfz_skill_install_uses_profile_runtime_targets() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let runtime = fixture._dir.path().join("agent-runtime");
+    std::fs::create_dir_all(runtime.join("profile-alpha").join(".claude"))?;
+    std::fs::create_dir_all(
+        fixture
+            ._dir
+            .path()
+            .join("Library/Application Support/Zotero/Profiles/test.default/agent-runtime/.claude"),
+    )?;
+    std::fs::write(
+        &fixture.config,
+        format!(
+            r#"[lfz]
+enabled = true
+zotero_data_dir = "{}"
+claude_runtime_dir = "{}"
+"#,
+            fixture._dir.path().display(),
+            runtime.display()
+        ),
+    )?;
+
+    let output = fixture
+        .cmd()?
+        .env("HOME", fixture._dir.path())
+        .args(["skill", "install", "--target", "lfz", "--dry-run"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["target"], "lfz");
+    assert!(value["source"].as_str().unwrap().contains("zotero-cli-lfz"));
+    assert!(value["target_path"]
+        .as_str()
+        .unwrap()
+        .contains("profile-alpha/.claude/skills/zotero-cli"));
+    let rendered_targets = serde_json::to_string(&value["target_paths"])?;
+    assert!(!rendered_targets.contains("Application Support/Zotero/Profiles"));
+    assert_eq!(value["target_paths"].as_array().unwrap().len(), 1);
     Ok(())
 }
 

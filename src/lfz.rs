@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use anyhow::{anyhow, Result};
 use rusqlite::{params, OptionalExtension, Row};
@@ -120,6 +123,8 @@ pub fn recap(
         "item_id": options.item_id,
         "compact": options.compact,
         "full_text": options.full_text,
+        "text_policy": text_policy(options.full_text),
+        "expand_policy": expand_policy(options.full_text),
         "trace_payloads": "disabled",
         "include_contexts": options.include_contexts,
         "conversations": conversations.values().collect::<Vec<_>>(),
@@ -202,6 +207,7 @@ pub fn turn(
         "status": status.get("status").cloned().unwrap_or_else(|| json!("unavailable")),
         "runtime_dir": config.lfz.claude_runtime_dir,
         "message_ref": message_ref,
+        "text_policy": "full_turn",
         "trace_payloads": "disabled",
         "include_contexts": include_contexts,
         "conversation": conversations.get(&conversation_key),
@@ -455,7 +461,9 @@ fn row_to_message(
         "text_excerpt": text_meta["excerpt"].clone(),
         "text": text_meta["text"].clone(),
         "text_chars": text_meta["chars"].clone(),
+        "text_estimated_tokens": text_meta["estimated_tokens"].clone(),
         "text_excerpt_chars": text_meta["excerpt_chars"].clone(),
+        "text_excerpt_estimated_tokens": text_meta["excerpt_estimated_tokens"].clone(),
         "text_truncated": text_meta["truncated"].clone(),
         "text_full_included": full_text,
         "timestamp": row.get::<_, i64>(4)?,
@@ -664,7 +672,9 @@ fn read_agent_run_by_id(
             "final_text_excerpt": final_meta["excerpt"].clone(),
             "final_text": final_meta["text"].clone(),
             "final_text_chars": final_meta["chars"].clone(),
+            "final_text_estimated_tokens": final_meta["estimated_tokens"].clone(),
             "final_text_excerpt_chars": final_meta["excerpt_chars"].clone(),
+            "final_text_excerpt_estimated_tokens": final_meta["excerpt_estimated_tokens"].clone(),
             "final_text_truncated": final_meta["truncated"].clone(),
             "final_text_full_included": full_text,
             "trace_payloads": "disabled",
@@ -715,7 +725,9 @@ fn read_agent_runs(
                 "final_text_excerpt": final_meta["excerpt"].clone(),
                 "final_text": final_meta["text"].clone(),
                 "final_text_chars": final_meta["chars"].clone(),
+                "final_text_estimated_tokens": final_meta["estimated_tokens"].clone(),
                 "final_text_excerpt_chars": final_meta["excerpt_chars"].clone(),
+                "final_text_excerpt_estimated_tokens": final_meta["excerpt_estimated_tokens"].clone(),
                 "final_text_truncated": final_meta["truncated"].clone(),
                 "final_text_full_included": full_text,
                 "trace_payloads": "disabled",
@@ -768,6 +780,11 @@ fn compact_recap(detail: &Value, limit: usize) -> Value {
         .take(limit)
         .map(compact_run)
         .collect::<Vec<_>>();
+    let paper_groups = compact_paper_groups(&conversations, &messages, &agent_runs, limit);
+    let full_text = detail
+        .get("full_text")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     json!({
         "status": detail.get("status").cloned().unwrap_or_else(|| json!("unavailable")),
@@ -775,7 +792,10 @@ fn compact_recap(detail: &Value, limit: usize) -> Value {
         "item_id": detail.get("item_id").cloned().unwrap_or(Value::Null),
         "compact": true,
         "limit": limit,
-        "full_text": detail.get("full_text").cloned().unwrap_or_else(|| json!(false)),
+        "full_text": full_text,
+        "text_policy": text_policy(full_text),
+        "expand_policy": expand_policy(full_text),
+        "paper_group_policy": "grouped_by_linked_zotero_item_when_available",
         "trace_payloads": "disabled",
         "include_contexts": detail.get("include_contexts").cloned().unwrap_or_else(|| json!(false)),
         "counts": {
@@ -787,6 +807,7 @@ fn compact_recap(detail: &Value, limit: usize) -> Value {
             "agent_finals": agent_runs.iter().filter(|run| run.get("final_text_excerpt").and_then(Value::as_str).map(|text| !text.is_empty()).unwrap_or(false)).count(),
             "event_count": agent_runs.iter().filter_map(|run| run.get("event_count").and_then(Value::as_i64)).sum::<i64>(),
         },
+        "paper_groups": paper_groups,
         "conversations": conversations.iter().take(limit).map(compact_conversation).collect::<Vec<_>>(),
         "questions": user_messages,
         "answers": assistant_messages,
@@ -805,12 +826,16 @@ fn compact_message(message: &Value) -> Value {
         "timestamp": message.get("timestamp").cloned().unwrap_or(Value::Null),
         "message_ref": message.get("message_ref").cloned().unwrap_or(Value::Null),
         "turn_command": message.get("turn_command").cloned().unwrap_or(Value::Null),
+        "expand_command": message.get("turn_command").cloned().unwrap_or(Value::Null),
         "text_excerpt": message.get("text_excerpt").cloned().unwrap_or(Value::Null),
         "text": message.get("text").cloned().unwrap_or(Value::Null),
         "text_chars": message.get("text_chars").cloned().unwrap_or(Value::Null),
+        "text_estimated_tokens": message.get("text_estimated_tokens").cloned().unwrap_or(Value::Null),
         "text_excerpt_chars": message.get("text_excerpt_chars").cloned().unwrap_or(Value::Null),
+        "text_excerpt_estimated_tokens": message.get("text_excerpt_estimated_tokens").cloned().unwrap_or(Value::Null),
         "text_truncated": message.get("text_truncated").cloned().unwrap_or(Value::Null),
         "text_full_included": message.get("text_full_included").cloned().unwrap_or(Value::Null),
+        "full_text_available": true,
         "run_mode": message.get("run_mode").cloned().unwrap_or(Value::Null),
         "agent_run_id": message.get("agent_run_id").cloned().unwrap_or(Value::Null),
         "model_name": message.get("model_name").cloned().unwrap_or(Value::Null),
@@ -832,12 +857,209 @@ fn compact_run(run: &Value) -> Value {
         "final_text_excerpt": run.get("final_text_excerpt").cloned().unwrap_or(Value::Null),
         "final_text": run.get("final_text").cloned().unwrap_or(Value::Null),
         "final_text_chars": run.get("final_text_chars").cloned().unwrap_or(Value::Null),
+        "final_text_estimated_tokens": run.get("final_text_estimated_tokens").cloned().unwrap_or(Value::Null),
         "final_text_excerpt_chars": run.get("final_text_excerpt_chars").cloned().unwrap_or(Value::Null),
+        "final_text_excerpt_estimated_tokens": run.get("final_text_excerpt_estimated_tokens").cloned().unwrap_or(Value::Null),
         "final_text_truncated": run.get("final_text_truncated").cloned().unwrap_or(Value::Null),
         "final_text_full_included": run.get("final_text_full_included").cloned().unwrap_or(Value::Null),
+        "full_text_available": true,
         "event_count": run.get("event_count").cloned().unwrap_or(Value::Null),
         "linked_item": conversation.and_then(|value| value.get("linked_item")).map(compact_item).unwrap_or(Value::Null),
     })
+}
+
+#[derive(Default)]
+struct PaperGroup {
+    group_key: String,
+    linked_item: Value,
+    conversation_keys: HashSet<i64>,
+    message_count: usize,
+    question_count: usize,
+    answer_count: usize,
+    agent_run_count: usize,
+    final_count: usize,
+    event_count: i64,
+    sample_questions: Vec<Value>,
+    sample_answers: Vec<Value>,
+    sample_finals: Vec<Value>,
+    expand_commands: Vec<String>,
+}
+
+fn compact_paper_groups(
+    _conversations: &[Value],
+    messages: &[Value],
+    agent_runs: &[Value],
+    limit: usize,
+) -> Vec<Value> {
+    let mut groups: HashMap<String, PaperGroup> = HashMap::new();
+
+    for message in messages {
+        let conversation = message.get("conversation").unwrap_or(&Value::Null);
+        let key = paper_group_key(conversation);
+        let group = groups.entry(key.clone()).or_insert_with(|| PaperGroup {
+            group_key: key,
+            linked_item: conversation
+                .get("linked_item")
+                .map(compact_item)
+                .unwrap_or(Value::Null),
+            ..PaperGroup::default()
+        });
+        if let Some(conversation_key) = message.get("conversation_key").and_then(Value::as_i64) {
+            group.conversation_keys.insert(conversation_key);
+        }
+        group.message_count += 1;
+        match message.get("role").and_then(Value::as_str) {
+            Some("user") => {
+                group.question_count += 1;
+                push_limited(
+                    &mut group.sample_questions,
+                    group_message_sample(message),
+                    2,
+                );
+                if let Some(command) = message.get("turn_command").and_then(Value::as_str) {
+                    push_unique_limited(&mut group.expand_commands, command.to_string(), 5);
+                }
+            }
+            Some("assistant") => {
+                group.answer_count += 1;
+                push_limited(&mut group.sample_answers, group_message_sample(message), 2);
+            }
+            _ => {}
+        }
+    }
+
+    for run in agent_runs {
+        let conversation = run.get("conversation").unwrap_or(&Value::Null);
+        let key = paper_group_key(conversation);
+        let group = groups.entry(key.clone()).or_insert_with(|| PaperGroup {
+            group_key: key,
+            linked_item: conversation
+                .get("linked_item")
+                .map(compact_item)
+                .unwrap_or(Value::Null),
+            ..PaperGroup::default()
+        });
+        if let Some(conversation_key) = run.get("conversation_key").and_then(Value::as_i64) {
+            group.conversation_keys.insert(conversation_key);
+        }
+        group.agent_run_count += 1;
+        group.event_count += run.get("event_count").and_then(Value::as_i64).unwrap_or(0);
+        if run
+            .get("final_text_excerpt")
+            .and_then(Value::as_str)
+            .map(|text| !text.is_empty())
+            .unwrap_or(false)
+        {
+            group.final_count += 1;
+            push_limited(&mut group.sample_finals, group_run_sample(run), 2);
+        }
+    }
+
+    let mut groups = groups.into_values().collect::<Vec<_>>();
+    groups.sort_by(|left, right| {
+        let left_score = left.message_count + left.agent_run_count;
+        let right_score = right.message_count + right.agent_run_count;
+        right_score
+            .cmp(&left_score)
+            .then_with(|| left.group_key.cmp(&right.group_key))
+    });
+
+    groups
+        .into_iter()
+        .take(limit)
+        .map(|group| {
+            let mut conversation_keys = group.conversation_keys.into_iter().collect::<Vec<_>>();
+            conversation_keys.sort_unstable();
+            let conversation_count = conversation_keys.len();
+            json!({
+                "group_key": group.group_key,
+                "linked_item": group.linked_item,
+                "conversation_keys": conversation_keys,
+                "counts": {
+                    "conversations": conversation_count,
+                    "messages": group.message_count,
+                    "questions": group.question_count,
+                    "answers": group.answer_count,
+                    "agent_runs": group.agent_run_count,
+                    "agent_finals": group.final_count,
+                    "event_count": group.event_count,
+                },
+                "sample_questions": group.sample_questions,
+                "sample_answers": group.sample_answers,
+                "sample_finals": group.sample_finals,
+                "expand_commands": group.expand_commands,
+                "text_policy": "compact_index",
+            })
+        })
+        .collect()
+}
+
+fn group_message_sample(message: &Value) -> Value {
+    let excerpt_value = message
+        .get("text_excerpt")
+        .and_then(Value::as_str)
+        .map(|text| excerpt(text, 240))
+        .unwrap_or_default();
+    json!({
+        "message_ref": message.get("message_ref").cloned().unwrap_or(Value::Null),
+        "turn_command": message.get("turn_command").cloned().unwrap_or(Value::Null),
+        "role": message.get("role").cloned().unwrap_or(Value::Null),
+        "timestamp": message.get("timestamp").cloned().unwrap_or(Value::Null),
+        "text_excerpt": excerpt_value,
+        "text_chars": message.get("text_chars").cloned().unwrap_or(Value::Null),
+        "text_truncated": message.get("text_truncated").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn group_run_sample(run: &Value) -> Value {
+    let excerpt_value = run
+        .get("final_text_excerpt")
+        .and_then(Value::as_str)
+        .map(|text| excerpt(text, 240))
+        .unwrap_or_default();
+    json!({
+        "run_id": run.get("run_id").cloned().unwrap_or(Value::Null),
+        "model_name": run.get("model_name").cloned().unwrap_or(Value::Null),
+        "created_at": run.get("created_at").cloned().unwrap_or(Value::Null),
+        "completed_at": run.get("completed_at").cloned().unwrap_or(Value::Null),
+        "final_text_excerpt": excerpt_value,
+        "final_text_chars": run.get("final_text_chars").cloned().unwrap_or(Value::Null),
+        "final_text_truncated": run.get("final_text_truncated").cloned().unwrap_or(Value::Null),
+        "event_count": run.get("event_count").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn paper_group_key(conversation: &Value) -> String {
+    if let Some(key) = conversation
+        .get("linked_item")
+        .and_then(|item| item.get("key"))
+        .and_then(Value::as_str)
+    {
+        return format!("item:{key}");
+    }
+    if let Some(id) = conversation
+        .get("linked_item")
+        .and_then(|item| item.get("id"))
+        .and_then(Value::as_i64)
+    {
+        return format!("item_id:{id}");
+    }
+    if let Some(conversation_key) = conversation.get("conversation_key").and_then(Value::as_i64) {
+        return format!("conversation:{conversation_key}");
+    }
+    "unlinked".to_string()
+}
+
+fn push_limited(values: &mut Vec<Value>, value: Value, limit: usize) {
+    if values.len() < limit {
+        values.push(value);
+    }
+}
+
+fn push_unique_limited(values: &mut Vec<String>, value: String, limit: usize) {
+    if values.len() < limit && !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
 }
 
 fn compact_conversation(conversation: &Value) -> Value {
@@ -978,10 +1200,32 @@ fn text_meta(value: &str, max_chars: usize, full_text: bool) -> Value {
         "excerpt": excerpt,
         "text": if full_text { Value::String(normalized) } else { Value::Null },
         "chars": chars,
+        "estimated_tokens": estimated_tokens(chars),
         "excerpt_chars": excerpt_chars,
+        "excerpt_estimated_tokens": estimated_tokens(excerpt_chars),
         "truncated": !full_text && chars > excerpt_chars,
         "excerpt_truncated": chars > excerpt_chars,
     })
+}
+
+fn text_policy(full_text: bool) -> &'static str {
+    if full_text {
+        "full_text_requested"
+    } else {
+        "compact_index"
+    }
+}
+
+fn expand_policy(full_text: bool) -> &'static str {
+    if full_text {
+        "full_text_is_included_without_trace_payloads"
+    } else {
+        "use_turn_command_or_expand_command_for_one_specific_full_question_and_final_answer"
+    }
+}
+
+fn estimated_tokens(chars: usize) -> usize {
+    chars.div_ceil(4)
 }
 
 fn excerpt(value: &str, max_chars: usize) -> String {

@@ -399,6 +399,10 @@ The helper is deliberately small and fast: startup ensures one token file and re
 
 The skill is optional. It teaches agents to call `zcli` directly and not depend on MCP or an adapter API.
 
+There are two skill surfaces: `skills/zotero-cli/SKILL.md` is the portable external-agent skill for Codex, Claude Code, Hermes Agent, and OpenClaw; `skills/zotero-cli-lfz/SKILL.md` is the specialized [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime skill that frames `zcli` as Zotero-native paper/library access.
+
+The `lfz` target is special: it uses `skills/zotero-cli-lfz/SKILL.md` and installs into detected [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime roots. Different Zotero profiles can have different runtime folders, so dry-run output may list multiple `target_paths`.
+
 Preview install paths:
 
 ```bash
@@ -416,7 +420,7 @@ Default targets:
 | [Codex](https://github.com/openai/codex) | `~/.codex/skills/zotero-cli` |
 | [Claude Code](https://code.claude.com/docs) | `~/.claude/skills/zotero-cli` |
 | [Hermes Agent](https://github.com/nousresearch/hermes-agent) | `~/.hermes/skills/zotero-cli` |
-| [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime | `~/Zotero/agent-runtime/.claude/skills/zotero-cli` |
+| [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime | Detected profile roots such as `<Zotero data>/agent-runtime/profile-*/.claude/skills/zotero-cli` |
 | [OpenClaw](https://github.com/openclaw/openclaw) | `~/.openclaw/skills/zotero-cli` |
 
 On macOS/Linux the installer prefers symlinks. Use `--copy` for a copied install. [OpenClaw](https://github.com/openclaw/openclaw) is detected before install; it is not required for normal use.
