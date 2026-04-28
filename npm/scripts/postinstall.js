@@ -14,6 +14,10 @@ if (process.env.ZOTERO_CLI_SKIP_POSTINSTALL === "1") {
   process.exit(0);
 }
 
+function isSourceCheckout() {
+  return fs.existsSync(path.join(root, ".git"));
+}
+
 function newestMtimeMs(target) {
   if (!fs.existsSync(target)) return 0;
   const stat = fs.statSync(target);
@@ -34,6 +38,7 @@ const sourceMtime = Math.max(
 const nativeMtime = fs.existsSync(nativeBinary) ? fs.statSync(nativeBinary).mtimeMs : 0;
 
 if (nativeMtime >= sourceMtime) {
+  maybeInstallFastBin(nativeBinary);
   process.exit(0);
 }
 
@@ -64,4 +69,22 @@ fs.mkdirSync(nativeDir, { recursive: true });
 fs.copyFileSync(releaseBinary, nativeBinary);
 if (process.platform !== "win32") {
   fs.chmodSync(nativeBinary, 0o755);
+}
+maybeInstallFastBin(nativeBinary);
+
+function maybeInstallFastBin(nativeBinary) {
+  if (process.platform === "win32" || process.env.ZOTERO_CLI_DISABLE_FAST_BIN === "1") {
+    return;
+  }
+  if (!fs.existsSync(nativeBinary) || isSourceCheckout()) {
+    return;
+  }
+  const binPath = path.join(root, "npm", "bin", "zcli");
+  const relativeNative = path.relative(path.dirname(binPath), nativeBinary);
+  try {
+    fs.rmSync(binPath, { force: true });
+    fs.symlinkSync(relativeNative, binPath);
+  } catch (error) {
+    console.warn(`zotero-cli: failed to install fast native zcli shim: ${error.message}`);
+  }
 }

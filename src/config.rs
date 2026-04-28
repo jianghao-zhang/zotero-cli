@@ -147,7 +147,9 @@ impl Config {
                 .filter(|path| path.exists());
         }
         if self.cache_dir.is_none() {
-            self.cache_dir = dirs::cache_dir().map(|dir| dir.join("zotero-cli"));
+            self.cache_dir = env::var_os("ZCLI_CACHE_DIR")
+                .map(PathBuf::from)
+                .or_else(|| dirs::cache_dir().map(|dir| dir.join("zotero-cli")));
         }
         if self.state_dir.is_none() {
             self.state_dir = env::var_os("ZCLI_STATE_DIR")

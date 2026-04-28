@@ -51,7 +51,9 @@ impl Fixture {
             .arg("--db")
             .arg(&self.db)
             .arg("--storage")
-            .arg(&self.storage);
+            .arg(&self.storage)
+            .env("ZCLI_CACHE_DIR", self._dir.path().join("cache"))
+            .env("ZCLI_STATE_DIR", self._dir.path().join("state"));
         Ok(cmd)
     }
 }
@@ -248,6 +250,80 @@ fn search_and_item_commands_read_local_fixture() -> anyhow::Result<()> {
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["items"][0]["key"], "ITEM0001");
     assert_eq!(value["items"][0]["title"], "Agent Memory for Research");
+    assert_eq!(value["items"][0]["short_title"], "Agent Memory");
+    assert_eq!(value["items"][0]["citation_key"], "lovelace2026AgentMemory");
+
+    let output = fixture
+        .cmd()?
+        .args(["resolve", "lovelace2026AgentMemory"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["matches"][0]["item"]["key"], "ITEM0001");
+    assert_eq!(value["matches"][0]["reasons"][0], "citation_key_exact");
+
+    let output = fixture
+        .cmd()?
+        .args(["resolve", "Agent Memory"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert!(value["matches"][0]["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason == "short_title_exact"));
+
+    let output = fixture
+        .cmd()?
+        .args(["find", "paper", "lovelace2026AgentMemory"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["mode"], "local_hybrid_lexical");
+    assert_eq!(value["hits"][0]["item"]["key"], "ITEM0001");
+    assert!(value["hits"][0]["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason == "citation_key_exact"));
+
+    let output = fixture
+        .cmd()?
+        .args(["find", "paper", "research systems"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["hits"][0]["item"]["key"], "ITEM0001");
+    assert!(value["hits"][0]["matched"].get("abstract").is_some());
+
+    let output = fixture
+        .cmd()?
+        .args(["find", "paper", "AMFR"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["hits"][0]["item"]["key"], "ITEM0001");
+    assert!(value["hits"][0]["reasons"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|reason| reason == "title_acronym_exact"));
 
     let output = fixture
         .cmd()?
@@ -302,6 +378,81 @@ fn search_and_item_commands_read_local_fixture() -> anyhow::Result<()> {
         value["markdown"].as_str().unwrap(),
         "# MinerU full markdown\n\nbody"
     );
+    Ok(())
+}
+
+#[test]
+fn local_index_update_search_and_get_fixture() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let output = fixture
+        .cmd()?
+        .args(["index", "status"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["exists"], false);
+    assert_eq!(value["backend"], "sqlite_fts5_bm25");
+
+    let output = fixture
+        .cmd()?
+        .args(["index", "update"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["indexed"], 1);
+    assert_eq!(value["models_required"], false);
+
+    let output = fixture
+        .cmd()?
+        .args(["index", "search", "lovelace2026AgentMemory"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["hits"][0]["item"]["key"], "ITEM0001");
+    assert_eq!(
+        value["hits"][0]["item"]["citation_key"],
+        "lovelace2026AgentMemory"
+    );
+
+    let output = fixture
+        .cmd()?
+        .args(["index", "search", "research systems"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["hits"][0]["item"]["key"], "ITEM0001");
+    assert!(value["hits"][0]["snippet"]
+        .as_str()
+        .unwrap()
+        .to_lowercase()
+        .contains("research"));
+
+    let output = fixture
+        .cmd()?
+        .args(["index", "get", "lovelace2026AgentMemory"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["item"]["key"], "ITEM0001");
+    assert_eq!(value["item"]["short_title"], "Agent Memory");
+    assert_eq!(value["truncated"]["abstract"], false);
     Ok(())
 }
 
@@ -497,8 +648,10 @@ fn public_command_smoke_outputs_json() -> anyhow::Result<()> {
     for args in [
         vec!["examples"],
         vec!["resolve", "Agent Memory"],
+        vec!["find", "paper", "memory"],
         vec!["paper", "ITEM0001"],
         vec!["context", "ITEM0001", "--budget", "5k"],
+        vec!["index", "status"],
         vec!["markdown", "status", "ITEM0001"],
         vec!["open", "ITEM0001", "--dry-run"],
         vec!["reveal", "ITEM0001", "--dry-run"],
@@ -985,7 +1138,7 @@ fn seed_data(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(
         r#"
         INSERT INTO itemTypes VALUES (1, 'journalArticle'), (2, 'attachment'), (3, 'annotation'), (4, 'note');
-        INSERT INTO fields VALUES (1, 'title'), (2, 'abstractNote'), (3, 'date'), (4, 'DOI'), (5, 'url'), (6, 'extra');
+        INSERT INTO fields VALUES (1, 'title'), (2, 'abstractNote'), (3, 'date'), (4, 'DOI'), (5, 'url'), (6, 'extra'), (7, 'shortTitle'), (8, 'citationKey');
         INSERT INTO items VALUES (1, 1, '2026-04-01 10:00:00', '2026-04-20 10:00:00', 'ITEM0001');
         INSERT INTO items VALUES (2, 2, '2026-04-01 10:10:00', '2026-04-20 10:10:00', 'ATTACH01');
         INSERT INTO items VALUES (3, 3, '2026-04-20 11:00:00', '2026-04-20 11:00:00', 'ANNOT001');
@@ -996,8 +1149,10 @@ fn seed_data(conn: &Connection) -> anyhow::Result<()> {
           (3, '2026'),
           (4, '10.1234/example'),
           (5, 'https://arxiv.org/abs/2601.12345'),
-          (6, 'arXiv:2601.12345');
-        INSERT INTO itemData VALUES (1, 1, 1), (1, 2, 2), (1, 3, 3), (1, 4, 4), (1, 5, 5), (1, 6, 6);
+          (6, 'arXiv:2601.12345'),
+          (7, 'Agent Memory'),
+          (8, 'lovelace2026AgentMemory');
+        INSERT INTO itemData VALUES (1, 1, 1), (1, 2, 2), (1, 3, 3), (1, 4, 4), (1, 5, 5), (1, 6, 6), (1, 7, 7), (1, 8, 8);
         INSERT INTO creators VALUES (1, 'Ada', 'Lovelace', 0);
         INSERT INTO itemCreators VALUES (1, 1, 1, 0);
         INSERT INTO tags VALUES (1, 'agents'), (2, 'memory');

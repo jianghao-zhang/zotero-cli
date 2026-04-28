@@ -15,7 +15,9 @@ Do not start by exploring the runtime folder, project files, `.claude` files, or
 
 ## Default Routing
 
-- If the user gives a title, DOI, arXiv ID, URL, filename, or vague paper reference, call `zcli resolve QUERY --format json`.
+- If the user gives a title, short title, citation key, DOI, arXiv ID, URL, filename, or vague paper reference, call `zcli resolve QUERY --format json`.
+- If the user gives a topic-like or fuzzy paper request, call `zcli find paper QUERY --format json` and then use `item.key` from the best hit.
+- When repeated broad search is needed, check `zcli index status --format json`; if the index exists, prefer `zcli index search QUERY --format json` before falling back to `zcli find paper`.
 - If you have an item key, call `zcli paper ITEMKEY --format json` for the compact Zotero-native paper surface.
 - If the user asks to understand, summarize, compare, review, explain, or reason about a paper, call `zcli context ITEMKEY --budget 40k --format json` or `zcli item markdown ITEMKEY --format text`.
 - If the user asks for exact paper text or the whole paper surface, prefer `zcli item markdown ITEMKEY --format text`. zcli will reuse llm-for-zotero MinerU `full.md` when available.
@@ -55,7 +57,11 @@ Do not start by exploring the runtime folder, project files, `.claude` files, or
 zcli doctor --format json
 zcli lfz doctor --format json
 
-zcli resolve "title / DOI / arXiv / URL / file path" --format json
+zcli resolve "title / short title / citation key / DOI / arXiv / URL / file path" --format json
+zcli find paper "agentic rl survey" --format json
+zcli index status --format json
+zcli index search "agentic rl survey" --format json
+zcli index get ITEMKEY --format json
 zcli paper ITEMKEY --format json
 zcli context ITEMKEY --budget 40k --format json
 zcli item markdown ITEMKEY --format text

@@ -1,6 +1,6 @@
 ---
 name: zotero-cli
-description: Use when an external agent needs portable Zotero library access through zcli for search, metadata, paper Markdown, notes, annotations, reading recaps, optional llm-for-zotero recaps, or dry-run-first Zotero writes. Applies to Codex, Claude Code, Hermes, OpenClaw, and other agents.
+description: Use when an external agent needs portable Zotero library access through zcli for search, local paper index lookup, metadata, paper Markdown, notes, annotations, reading recaps, optional llm-for-zotero recaps, or dry-run-first Zotero writes. Applies to Codex, Claude Code, Hermes, OpenClaw, and other agents.
 ---
 
 # Zotero CLI
@@ -16,7 +16,9 @@ Use this skill when working with a user's Zotero library through `zcli` from a n
 - Use `zcli helper doctor --format json` to check the optional Zotero helper plugin before executing local Zotero-runtime writes.
 - Treat helper execute results as compact by default. Fetch normal item details with `zcli item get ITEMKEY --format json` when more metadata is needed after a write.
 - Do not assume `llm-for-zotero` exists. Use `zcli lfz doctor` before `zcli recap lfz`.
-- When the user gives a title, DOI, arXiv ID, URL, or file path instead of a Zotero key, call `zcli resolve QUERY --format json` first.
+- When the user gives a title, short title, citation key, DOI, arXiv ID, URL, or file path instead of a Zotero key, call `zcli resolve QUERY --format json` first.
+- When the user gives a topic-like or fuzzy paper request, call `zcli find paper QUERY --format json` and then use `item.key` from the best hit.
+- When repeated broad search is needed, check `zcli index status --format json`; if the index exists, prefer `zcli index search QUERY --format json` before falling back to `zcli find paper`.
 - Prefer `zcli paper ITEMKEY --format json` for a one-paper work surface, and `zcli context ITEMKEY --budget 40k --format json` when preparing agent context.
 - For "what did I read recently" or broad date-range recaps, use `zcli recap reading --from DATE --to DATE --format json` first. Treat llm-for-zotero as a bounded overlay, not the primary source.
 - `zcli recap reading` automatically includes compact llm-for-zotero hints when the user enabled lfz in zcli config; pass `--no-lfz` when the user asks for pure reading metadata only.
@@ -32,6 +34,11 @@ Use this skill when working with a user's Zotero library through `zcli` from a n
 ```bash
 zcli doctor --format json
 zcli resolve "agent memory" --format json
+zcli find paper "agentic rl survey" --format json
+zcli index status --format json
+zcli index update --format json
+zcli index search "agentic rl survey" --format json
+zcli index get ITEMKEY --format json
 zcli paper ITEMKEY --format json
 zcli context ITEMKEY --budget 40k --format json
 zcli search list "agent memory" --format json
@@ -61,7 +68,7 @@ zcli inbox status --format json
 
 ## Output Use
 
-For paper identity, prefer `key`, `title`, `authors`, `year`, `doi`, `arxiv`, and `url`.
+For paper identity, prefer `key`, `citation_key`, `title`, `short_title`, `authors`, `year`, `doi`, `arxiv`, and `url`.
 
 For recap provenance, preserve the exact `provenance` value. `metadata_modified` is only a fallback touched-paper signal, not definite reading.
 

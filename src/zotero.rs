@@ -20,6 +20,8 @@ pub struct ItemSummary {
     pub key: String,
     pub item_type: String,
     pub title: Option<String>,
+    pub short_title: Option<String>,
+    pub citation_key: Option<String>,
     pub authors: Vec<String>,
     pub year: Option<i32>,
     pub doi: Option<String>,
@@ -196,7 +198,19 @@ impl ZoteroDb {
             items.retain(|item| {
                 item.key.to_lowercase().contains(&needle)
                     || item
+                        .citation_key
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .contains(&needle)
+                    || item
                         .title
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .contains(&needle)
+                    || item
+                        .short_title
                         .as_deref()
                         .unwrap_or_default()
                         .to_lowercase()
@@ -232,6 +246,23 @@ impl ZoteroDb {
             if item.key.eq_ignore_ascii_case(query) {
                 score = score.max(100);
                 reasons.push("key_exact");
+            }
+            if item
+                .citation_key
+                .as_deref()
+                .map(|citation_key| citation_key.eq_ignore_ascii_case(query))
+                .unwrap_or(false)
+            {
+                score = score.max(98);
+                reasons.push("citation_key_exact");
+            } else if item
+                .citation_key
+                .as_deref()
+                .map(|citation_key| citation_key.to_lowercase().contains(&needle))
+                .unwrap_or(false)
+            {
+                score = score.max(83);
+                reasons.push("citation_key_contains");
             }
             if item
                 .doi
@@ -286,6 +317,23 @@ impl ZoteroDb {
                 reasons.push("title_contains");
             }
             if item
+                .short_title
+                .as_deref()
+                .map(|short_title| short_title.eq_ignore_ascii_case(query))
+                .unwrap_or(false)
+            {
+                score = score.max(92);
+                reasons.push("short_title_exact");
+            } else if item
+                .short_title
+                .as_deref()
+                .map(|short_title| short_title.to_lowercase().contains(&needle))
+                .unwrap_or(false)
+            {
+                score = score.max(82);
+                reasons.push("short_title_contains");
+            }
+            if item
                 .authors
                 .iter()
                 .any(|author| author.to_lowercase().contains(&needle))
@@ -329,6 +377,193 @@ impl ZoteroDb {
         });
         matches.truncate(limit);
         Ok(matches)
+    }
+
+    pub fn find_papers(&self, query: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let needle = query.to_lowercase();
+        let tokens = search_tokens(query);
+        let mut hits = Vec::new();
+
+        for item in self.base_items(usize::MAX)? {
+            let fields = self.field_values(item.id)?;
+            let collections = self.collections_for_item(item.id)?;
+            let tags = self.tags_for_item(item.id)?;
+            let mut score = 0_i64;
+            let mut reasons = Vec::new();
+            let mut matched = BTreeMap::new();
+
+            score_text_field(
+                "key",
+                Some(item.key.as_str()),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(100, 88, 20, 0),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            score_text_field(
+                "citation_key",
+                item.citation_key.as_deref(),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(98, 90, 20, 0),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            score_text_field(
+                "short_title",
+                item.short_title.as_deref(),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(94, 86, 18, 8),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            score_acronym_field(
+                "short_title",
+                item.short_title.as_deref(),
+                &needle,
+                93,
+                86,
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            score_text_field(
+                "doi",
+                item.doi.as_deref(),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(95, 82, 16, 0),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            score_text_field(
+                "arxiv",
+                item.arxiv.as_deref(),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(94, 82, 16, 0),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            score_text_field(
+                "url",
+                item.url.as_deref(),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(90, 76, 8, 0),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            score_text_field(
+                "title",
+                item.title.as_deref(),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(96, 78, 12, 18),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            score_acronym_field(
+                "title",
+                item.title.as_deref(),
+                &needle,
+                91,
+                84,
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+
+            let authors = item.authors.join("; ");
+            score_text_field(
+                "authors",
+                non_empty(authors.as_str()),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(74, 58, 6, 8),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            score_text_field(
+                "abstract",
+                fields.get("abstractNote").map(String::as_str),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(52, 44, 3, 8),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+
+            let collection_names = collections
+                .iter()
+                .map(|collection| collection.name.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            score_text_field(
+                "collections",
+                non_empty(collection_names.as_str()),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(76, 62, 8, 10),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+            let tag_names = tags.join("; ");
+            score_text_field(
+                "tags",
+                non_empty(tag_names.as_str()),
+                query,
+                &needle,
+                &tokens,
+                FieldScore::new(72, 60, 8, 10),
+                &mut score,
+                &mut reasons,
+                &mut matched,
+            );
+
+            if score > 0 {
+                hits.push(json!({
+                    "score": score,
+                    "reasons": reasons,
+                    "matched": matched,
+                    "item": item,
+                }));
+            }
+        }
+
+        hits.sort_by(|a, b| {
+            b.get("score")
+                .and_then(serde_json::Value::as_i64)
+                .cmp(&a.get("score").and_then(serde_json::Value::as_i64))
+        });
+        hits.truncate(limit);
+        Ok(hits)
     }
 
     pub fn recent(&self, days: i64, limit: usize) -> Result<Vec<ItemSummary>> {
@@ -839,9 +1074,10 @@ impl ZoteroDb {
         );
         push_bib_field(&mut fields, "doi", item.doi.as_deref());
         push_bib_field(&mut fields, "url", item.url.as_deref());
+        let entry_key = item.citation_key.as_deref().unwrap_or(&item.key);
         Ok(format!(
             "@{entry_type}{{{},\n{}\n}}",
-            item.key,
+            entry_key,
             fields.join(",\n")
         ))
     }
@@ -944,13 +1180,18 @@ impl ZoteroDb {
     fn enrich_summary(&self, base: BaseItemRow) -> Result<ItemSummary> {
         let fields = self.field_values(base.id)?;
         let title = fields.get("title").cloned();
+        let short_title = fields.get("shortTitle").cloned();
         let date = fields.get("date").or_else(|| fields.get("year")).cloned();
         let year = parse_year(date.as_deref());
         let doi = fields.get("DOI").or_else(|| fields.get("doi")).cloned();
         let url = fields.get("url").cloned();
+        let extra = fields.get("extra");
+        let citation_key = fields
+            .get("citationKey")
+            .cloned()
+            .or_else(|| extract_extra_citation_key(extra.map(String::as_str)));
         let arxiv = extract_arxiv_id(
-            fields
-                .get("extra")
+            extra
                 .or(url.as_ref())
                 .or(doi.as_ref())
                 .or(title.as_ref())
@@ -961,6 +1202,8 @@ impl ZoteroDb {
             key: base.key,
             item_type: base.item_type,
             title,
+            short_title,
+            citation_key,
             authors: self.creators_for_item(base.id)?,
             year,
             doi,
@@ -1275,6 +1518,149 @@ fn parse_year(value: Option<&str>) -> Option<i32> {
     re.find(value?)?.as_str().parse().ok()
 }
 
+#[derive(Clone, Copy)]
+struct FieldScore {
+    exact: i64,
+    contains: i64,
+    token_weight: i64,
+    all_token_bonus: i64,
+}
+
+impl FieldScore {
+    fn new(exact: i64, contains: i64, token_weight: i64, all_token_bonus: i64) -> Self {
+        Self {
+            exact,
+            contains,
+            token_weight,
+            all_token_bonus,
+        }
+    }
+}
+
+fn score_text_field(
+    name: &str,
+    value: Option<&str>,
+    query: &str,
+    needle: &str,
+    tokens: &[String],
+    weights: FieldScore,
+    score: &mut i64,
+    reasons: &mut Vec<String>,
+    matched: &mut BTreeMap<String, String>,
+) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let lower = value.to_lowercase();
+    if value.eq_ignore_ascii_case(query) {
+        *score = (*score).max(weights.exact);
+        reasons.push(format!("{name}_exact"));
+        matched.insert(name.to_string(), compact_match_value(value));
+        return;
+    }
+    if lower.contains(needle) {
+        *score = (*score).max(weights.contains);
+        reasons.push(format!("{name}_contains"));
+        matched.insert(name.to_string(), compact_match_value(value));
+    }
+    if !tokens.is_empty() && weights.token_weight > 0 {
+        let count = tokens
+            .iter()
+            .filter(|token| lower.contains(token.as_str()))
+            .count();
+        if count > 0 {
+            let token_score = count as i64 * weights.token_weight
+                + if count == tokens.len() {
+                    weights.all_token_bonus
+                } else {
+                    0
+                };
+            *score = (*score).max(token_score);
+            reasons.push(format!("{name}_tokens"));
+            matched
+                .entry(name.to_string())
+                .or_insert_with(|| compact_match_value(value));
+        }
+    }
+}
+
+fn score_acronym_field(
+    name: &str,
+    value: Option<&str>,
+    needle: &str,
+    exact_score: i64,
+    contains_score: i64,
+    score: &mut i64,
+    reasons: &mut Vec<String>,
+    matched: &mut BTreeMap<String, String>,
+) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let acronym = text_acronym(value).to_lowercase();
+    if acronym.len() < 2 {
+        return;
+    }
+    if acronym == needle {
+        *score = (*score).max(exact_score);
+        reasons.push(format!("{name}_acronym_exact"));
+        matched.insert(name.to_string(), compact_match_value(value));
+    } else if acronym.contains(needle) {
+        *score = (*score).max(contains_score);
+        reasons.push(format!("{name}_acronym_contains"));
+        matched.insert(name.to_string(), compact_match_value(value));
+    }
+}
+
+fn search_tokens(query: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for token in query
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(str::trim)
+        .filter(|token| token.chars().count() >= 2)
+    {
+        let token = token.to_lowercase();
+        if !tokens.iter().any(|existing| existing == &token) {
+            tokens.push(token);
+        }
+    }
+    tokens
+}
+
+fn text_acronym(value: &str) -> String {
+    let mut acronym = String::new();
+    for token in value
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        if let Some(ch) = token.chars().next() {
+            acronym.extend(ch.to_uppercase());
+        }
+    }
+    acronym
+}
+
+fn non_empty(value: &str) -> Option<&str> {
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn compact_match_value(value: &str) -> String {
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if idx >= 240 {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
 pub fn extract_arxiv_id(value: Option<&str>) -> Option<String> {
     let text = value?;
     let re = Regex::new(
@@ -1285,6 +1671,23 @@ pub fn extract_arxiv_id(value: Option<&str>) -> Option<String> {
         .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()))
 }
 
+pub fn extract_extra_citation_key(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    for line in value.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_lowercase();
+        for prefix in ["citation key:", "citationkey:"] {
+            if lower.starts_with(prefix) {
+                let key = trimmed[prefix.len()..].trim();
+                if !key.is_empty() {
+                    return Some(key.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 fn render_fallback_markdown(detail: &ItemDetail, extracted: &ExtractedText) -> String {
     let mut out = String::new();
     out.push_str("---\n");
@@ -1293,6 +1696,16 @@ fn render_fallback_markdown(detail: &ItemDetail, extracted: &ExtractedText) -> S
         "title: {}\n",
         yaml_string(detail.summary.title.as_deref().unwrap_or("Untitled"))
     ));
+    yaml_opt(
+        &mut out,
+        "short_title",
+        detail.summary.short_title.as_deref(),
+    );
+    yaml_opt(
+        &mut out,
+        "citation_key",
+        detail.summary.citation_key.as_deref(),
+    );
     yaml_string_list(&mut out, "authors", &detail.summary.authors);
     if let Some(year) = detail.summary.year {
         out.push_str(&format!("year: {year}\n"));
@@ -1368,6 +1781,12 @@ fn render_fallback_markdown(detail: &ItemDetail, extracted: &ExtractedText) -> S
 fn push_metadata_section(out: &mut String, detail: &ItemDetail) {
     out.push_str("## Metadata\n\n");
     out.push_str(&format!("- Key: `{}`\n", detail.summary.key));
+    if let Some(citation_key) = &detail.summary.citation_key {
+        out.push_str(&format!("- Citation Key: `{citation_key}`\n"));
+    }
+    if let Some(short_title) = &detail.summary.short_title {
+        out.push_str(&format!("- Short Title: {short_title}\n"));
+    }
     if !detail.summary.authors.is_empty() {
         out.push_str(&format!(
             "- Authors: {}\n",

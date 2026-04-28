@@ -130,8 +130,9 @@ Output defaults to `auto`:
 | --- | --- | --- |
 | Health and examples | `doctor`, `examples` | Checks config, local Zotero paths, optional Web API config, helper status, and lfz availability. |
 | Config | `setup`, `config init`, `config status`, `config web-api` | Writes and inspects local config. |
-| Resolve and paper surface | `resolve`, `paper`, `context` | Finds an item from natural inputs, returns a compact paper view, or builds an agent context pack. |
+| Resolve and paper surface | `resolve`, `find paper`, `paper`, `context` | Finds an item from natural inputs such as title, short title, citation key, DOI, arXiv, URL, or file path; returns a compact paper view or builds an agent context pack. |
 | Search | `search list`, `search grep`, `search context` | Searches metadata/full text and returns matching context. |
+| Local paper index | `index status`, `index update`, `index search`, `index get` | Builds a local SQLite FTS5/BM25 sidecar index for repeated fast paper search. No network or model is required. |
 | Item reads | `item get`, `item extract`, `item annotations`, `item notes`, `item attachments`, `item bibtex`, `item markdown` | Reads Zotero item metadata, extracted text, annotations, notes, attachments, BibTeX, and paper Markdown. |
 | Markdown status | `markdown status` | Shows whether Markdown will come from lfz MinerU cache or local fallback. |
 | Library browsing | `collection list`, `collection items`, `tags list`, `tags items`, `recent` | Lists collections, tags, tagged items, collection items, and recently touched papers. |
@@ -151,7 +152,8 @@ Output defaults to `auto`:
 Find a paper from whatever identifier you have:
 
 ```bash
-zcli resolve "title / DOI / arXiv / URL / file path"
+zcli resolve "title / short title / citation key / DOI / arXiv / URL / file path"
+zcli find paper "agentic rl survey"
 zcli paper ITEMKEY
 ```
 
@@ -169,6 +171,16 @@ zcli search list "query"
 zcli search grep "regex-or-text"
 zcli search context ITEMKEY "regex-or-text"
 ```
+
+Build and search the local paper index:
+
+```bash
+zcli index update
+zcli index search "agentic rl survey"
+zcli index get ITEMKEY
+```
+
+The index is a generated local sidecar in zcli's cache directory. It currently uses SQLite FTS5/BM25 over Zotero metadata, identifiers, short titles, citation keys, tags, collections, abstracts, notes, and annotations. `--include-full-text` can add extracted attachment text when you want heavier full-paper search. Future semantic layers should attach to this index instead of replacing the CLI surface.
 
 Read item data:
 
@@ -432,6 +444,7 @@ The current local CLI path is usable, but these pieces still need work before tr
 | Area | Remaining work |
 | --- | --- |
 | Web API smoke and remote mode | Add `zcli web-api doctor` or `zcli web-api ping` to validate auth, library ID, permissions, and read access against Zotero's official API. Current Web API support is configuration-only. |
+| Semantic index layer | Extend the new local index with optional GGUF embeddings, local reranking, warm daemon mode, and cached query expansion. The current shipped layer is model-free SQLite FTS5/BM25. |
 | Inbox/import pipeline | Implement `zcli inbox fetch` as the external "papers to read" entry point with source adapters, duplicate detection, dry-run previews, and explicit execution for imports. |
 | Mirror watch hardening | Run long-duration `zcli mirror watch` tests, validate CPU/I/O over hours or days, and polish launchd/daemon installation. Current actual write testing covered small rebuilds; full-library sync has been dry-run tested. |
 | Helper execute coverage | Expand real helper tests beyond tag add/remove to notes, collections, file import/link, attachment rename, batch operations, and trash safety. |

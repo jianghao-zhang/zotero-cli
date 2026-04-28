@@ -7,6 +7,7 @@ const { spawnSync } = require("child_process");
 
 const root = path.resolve(__dirname, "..", "..");
 const cli = path.join(root, "npm", "bin", "zcli.js");
+const shellCli = path.join(root, "npm", "bin", "zcli");
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "zcli-npm-smoke-"));
 const config = path.join(temp, "config.toml");
 const db = path.join(temp, "zotero.sqlite");
@@ -28,6 +29,17 @@ function run(args) {
 }
 
 run(["--help"]);
+if (process.platform !== "win32") {
+  const shellHelp = spawnSync(shellCli, ["--help"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  if (shellHelp.status !== 0) {
+    process.stderr.write(shellHelp.stdout || "");
+    process.stderr.write(shellHelp.stderr || "");
+    process.exit(shellHelp.status || 1);
+  }
+}
 const stdout = run([
   "--config",
   config,

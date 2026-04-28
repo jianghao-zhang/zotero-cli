@@ -16,7 +16,7 @@ use crate::{
     helper::{
         self, HelperInstallOptions, HelperPackageOptions, API_KEY_URL, API_LIBRARY_ID_HELP_URL,
     },
-    lfz,
+    index, lfz,
     mirror::{self, MirrorMode, MirrorOptions},
     output::OutputFormat,
     skill::{self, SkillInstallOptions, SkillTarget},
@@ -49,6 +49,10 @@ pub enum Commands {
     Doctor,
     Examples,
     Resolve(ResolveArgs),
+    Find {
+        #[command(subcommand)]
+        command: FindCommands,
+    },
     Paper(PaperArgs),
     Context(ContextPackArgs),
     Open(OpenArgs),
@@ -60,6 +64,10 @@ pub enum Commands {
     Search {
         #[command(subcommand)]
         command: SearchCommands,
+    },
+    Index {
+        #[command(subcommand)]
+        command: IndexCommands,
     },
     Item {
         #[command(subcommand)]
@@ -126,6 +134,15 @@ pub struct ResolveArgs {
     pub query: String,
     #[arg(long, default_value_t = 10)]
     pub limit: usize,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FindCommands {
+    Paper {
+        query: String,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -207,6 +224,42 @@ pub enum SearchCommands {
         #[arg(long, default_value_t = 600)]
         context_chars: usize,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum IndexCommands {
+    Status,
+    Update(IndexUpdateArgs),
+    Rebuild(IndexUpdateArgs),
+    Search(IndexSearchArgs),
+    Get(IndexGetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct IndexUpdateArgs {
+    #[arg(
+        long,
+        help = "Include extracted attachment/full-text body in the local index"
+    )]
+    pub include_full_text: bool,
+    #[arg(long, default_value_t = 80_000)]
+    pub max_chars: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct IndexSearchArgs {
+    pub query: String,
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
+    #[arg(long, default_value_t = 420)]
+    pub snippet_chars: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct IndexGetArgs {
+    pub key: String,
+    #[arg(long, default_value_t = 4000)]
+    pub max_chars: usize,
 }
 
 #[derive(Debug, Subcommand)]
@@ -706,12 +759,14 @@ pub fn dispatch(cli: &Cli, context: &Context) -> Result<Value> {
         Commands::Doctor => doctor(context),
         Commands::Examples => examples(),
         Commands::Resolve(args) => dispatch_resolve(context, args),
+        Commands::Find { command } => dispatch_find(context, command),
         Commands::Paper(args) => dispatch_paper(context, args),
         Commands::Context(args) => dispatch_context_pack(context, args),
         Commands::Open(args) => dispatch_open_reveal(context, args, false),
         Commands::Reveal(args) => dispatch_open_reveal(context, args, true),
         Commands::Config { command } => dispatch_config(context, command),
         Commands::Search { command } => dispatch_search(context, command),
+        Commands::Index { command } => dispatch_index(context, command),
         Commands::Item { command } => dispatch_item(context, command),
         Commands::Markdown { command } => dispatch_markdown(context, command),
         Commands::Collection { command } => dispatch_collection(context, command),
@@ -776,7 +831,10 @@ fn examples() -> Result<Value> {
     Ok(json!({
         "ok": true,
         "examples": [
-            {"name": "find a paper", "command": "zcli resolve \"paper title, DOI, arXiv, URL, or file path\""},
+            {"name": "find a paper", "command": "zcli resolve \"paper title, short title, citation key, DOI, arXiv, URL, or file path\""},
+            {"name": "hybrid paper finder", "command": "zcli find paper \"agentic rl survey\" --format json"},
+            {"name": "build local paper index", "command": "zcli index update --format json"},
+            {"name": "search local paper index", "command": "zcli index search \"agent memory\" --format json"},
             {"name": "paper work surface", "command": "zcli paper ITEMKEY --format pretty"},
             {"name": "agent context pack", "command": "zcli context ITEMKEY --budget 40k --format json"},
             {"name": "raw markdown", "command": "zcli item markdown ITEMKEY --format text"},
@@ -800,6 +858,19 @@ fn dispatch_resolve(context: &Context, args: &ResolveArgs) -> Result<Value> {
         "count": matches.len(),
         "matches": matches,
     }))
+}
+
+fn dispatch_find(context: &Context, command: &FindCommands) -> Result<Value> {
+    let db = ZoteroDb::open(&context.config)?;
+    match command {
+        FindCommands::Paper { query, limit } => Ok(json!({
+            "ok": true,
+            "query": query,
+            "mode": "local_hybrid_lexical",
+            "note": "Local zero-network weighted search over Zotero metadata; embedding semantic search can be layered on later.",
+            "hits": db.find_papers(query, *limit)?,
+        })),
+    }
 }
 
 fn dispatch_paper(context: &Context, args: &PaperArgs) -> Result<Value> {
@@ -939,6 +1010,34 @@ fn dispatch_search(context: &Context, command: &SearchCommands) -> Result<Value>
             }
             Ok(value)
         }
+    }
+}
+
+fn dispatch_index(context: &Context, command: &IndexCommands) -> Result<Value> {
+    match command {
+        IndexCommands::Status => index::status(&context.config),
+        IndexCommands::Update(args) | IndexCommands::Rebuild(args) => index::update(
+            &context.config,
+            &index::IndexOptions {
+                include_full_text: args.include_full_text,
+                max_chars: args.max_chars,
+            },
+        ),
+        IndexCommands::Search(args) => index::search(
+            &context.config,
+            &args.query,
+            &index::SearchOptions {
+                limit: args.limit,
+                snippet_chars: args.snippet_chars,
+            },
+        ),
+        IndexCommands::Get(args) => index::get(
+            &context.config,
+            &args.key,
+            &index::GetOptions {
+                max_chars: args.max_chars,
+            },
+        ),
     }
 }
 

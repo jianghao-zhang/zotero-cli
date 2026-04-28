@@ -1,0 +1,48 @@
+#!/bin/sh
+
+set -eu
+
+resolve_self() {
+  target=$1
+  while [ -L "$target" ]; do
+    dir=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd -P)
+    link=$(readlink "$target")
+    case "$link" in
+      /*) target=$link ;;
+      *) target=$dir/$link ;;
+    esac
+  done
+  CDPATH= cd -- "$(dirname -- "$target")" && pwd -P
+}
+
+platform_binary() {
+  os=$(uname -s 2>/dev/null || echo unknown)
+  arch=$(uname -m 2>/dev/null || echo unknown)
+  case "$os:$arch" in
+    Darwin:arm64) echo "zcli-darwin-arm64" ;;
+    Darwin:x86_64) echo "zcli-darwin-x64" ;;
+    Linux:x86_64) echo "zcli-linux-x64" ;;
+    Linux:aarch64|Linux:arm64) echo "zcli-linux-arm64" ;;
+    *) echo "" ;;
+  esac
+}
+
+script_dir=$(resolve_self "$0")
+root=$(CDPATH= cd -- "$script_dir/../.." && pwd -P)
+
+if [ -n "${ZCLI_BINARY:-}" ] && [ -x "$ZCLI_BINARY" ]; then
+  exec "$ZCLI_BINARY" "$@"
+fi
+
+native_name=$(platform_binary)
+for candidate in \
+  "$root/target/release/zcli" \
+  "$root/npm/native/$native_name" \
+  "$root/target/debug/zcli"
+do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    ZCLI_PACKAGE_ROOT=$root exec "$candidate" "$@"
+  fi
+done
+
+exec node "$script_dir/zcli.js" "$@"

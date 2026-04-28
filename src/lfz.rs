@@ -1080,7 +1080,9 @@ fn compact_item(item: &Value) -> Value {
     json!({
         "id": item.get("id").cloned().unwrap_or(Value::Null),
         "key": item.get("key").cloned().unwrap_or(Value::Null),
+        "citation_key": item.get("citation_key").cloned().unwrap_or(Value::Null),
         "title": item.get("title").cloned().unwrap_or(Value::Null),
+        "short_title": item.get("short_title").cloned().unwrap_or(Value::Null),
         "year": item.get("year").cloned().unwrap_or(Value::Null),
         "doi": item.get("doi").cloned().unwrap_or(Value::Null),
         "arxiv": item.get("arxiv").cloned().unwrap_or(Value::Null),

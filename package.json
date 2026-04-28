@@ -4,8 +4,8 @@
   "description": "Fast local Zotero CLI for humans and agents",
   "license": "MIT",
   "bin": {
-    "zcli": "./npm/bin/zcli.js",
-    "zotero-cli": "./npm/bin/zcli.js"
+    "zcli": "./npm/bin/zcli",
+    "zotero-cli": "./npm/bin/zcli"
   },
   "files": [
     "Cargo.lock",

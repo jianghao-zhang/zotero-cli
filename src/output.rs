@@ -213,7 +213,9 @@ fn print_doctor(value: &Value) -> bool {
     println!("  imports/mutations: dry-run-first only");
     println!();
     println!("Useful next");
-    println!("  find a paper: zcli resolve \"title, DOI, arXiv, URL, or path\"");
+    println!(
+        "  find a paper: zcli resolve \"title, short title, citation key, DOI, arXiv, URL, or path\""
+    );
     println!("  paper view:   zcli paper ITEMKEY --format pretty");
     println!("  agent pack:   zcli context ITEMKEY --budget 40k --format json");
     true

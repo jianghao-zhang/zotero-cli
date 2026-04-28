@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod date_range;
 mod helper;
+mod index;
 mod lfz;
 mod mirror;
 mod output;
