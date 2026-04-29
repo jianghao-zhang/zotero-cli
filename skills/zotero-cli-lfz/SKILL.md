@@ -1,5 +1,5 @@
 ---
-name: zotero-native-access
+name: zotero-cli
 description: Use inside llm-for-zotero Claude Code mode when the agent needs Zotero-native access to papers, selected or pinned paper context, paper text, notes, annotations, collections, tags, reading history, or llm-for-zotero conversation recaps through zcli.
 ---
 
