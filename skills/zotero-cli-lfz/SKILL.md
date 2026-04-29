@@ -1,100 +1,59 @@
 ---
-name: zotero-cli
-description: Use inside the llm-for-zotero Claude Code runtime when the agent needs Zotero-native access to papers, selected or pinned paper context, paper text, notes, annotations, collections, reading history, or llm-for-zotero conversation recaps through zcli.
+name: zotero-native-access
+description: Use inside llm-for-zotero Claude Code mode when the agent needs Zotero-native access to papers, selected or pinned paper context, paper text, notes, annotations, collections, tags, reading history, or llm-for-zotero conversation recaps through zcli.
 ---
 
 # Zotero Native Access via zcli
 
-Use this skill inside the llm-for-zotero Claude Code runtime whenever the user asks about papers, Zotero library state, selected/pinned paper context, notes, annotations, reading history, or previous llm-for-zotero conversations.
+Use this skill inside llm-for-zotero Claude Code mode whenever the user asks about papers, Zotero library state, selected or pinned papers, paper text, notes, annotations, reading history, collections, tags, or previous llm-for-zotero conversations.
 
 ## Mental Model
 
-In this runtime, treat `zcli` as the Zotero-native capability layer available to the agent. It is the first tool surface for Zotero library facts, paper text, attachments, Markdown, notes, annotations, collections, tags, recaps, and llm-for-zotero conversation history.
+Treat `zcli` as the Zotero-native capability layer for the agent.
 
-Do not start by exploring the runtime folder, project files, `.claude` files, or generic filesystem state. Those are implementation details. First ask Zotero through `zcli`.
+Do not start from runtime folders, project files, `.claude` files, or generic filesystem exploration. Those are implementation details. Start from Zotero concepts: item identity, paper text, metadata, notes, annotations, collections, tags, reading history, and llm-for-zotero conversation history.
 
-## Default Routing
+## Routing
 
-- If the user gives a title, short title, citation key, DOI, arXiv ID, URL, filename, or vague paper reference, call `zcli resolve QUERY --format json`.
-- If the user gives a topic-like or fuzzy paper request, call `zcli find paper QUERY --format json` and then use `item.key` from the best hit.
-- When repeated broad search is needed, check `zcli index status --format json`; if the index exists, prefer `zcli index search QUERY --format json` for paper candidates before falling back to `zcli find paper`.
-- For fuzzy passage search, use `zcli index chunks QUERY --format json`. Add `--item ITEMKEY` for one paper, `--collection NAME` for a folder-like scope, or `--tag TAG` for a tagged slice of the library. If full-paper passages are missing, ask the user to run `zcli index update --include-full-text --format json`.
-- Treat `index chunks` results as passage candidates. Use `page`/`page_label` when present, but respect `page_policy`: missing pages mean the source text has no reliable page marker.
-- To expand one passage, follow the hit's `expand_command` or call `zcli index chunk CHUNK_ID --format json`.
-- If you have an item key, call `zcli paper ITEMKEY --format json` for the compact Zotero-native paper surface.
-- If the user asks to understand, summarize, compare, review, explain, or reason about a paper, call `zcli context ITEMKEY --budget 40k --format json` or `zcli item markdown ITEMKEY --format text`.
-- If the user asks for exact paper text or the whole paper surface, prefer `zcli item markdown ITEMKEY --format text`. zcli will reuse llm-for-zotero MinerU `full.md` when available.
-- If the user asks about highlights, comments, margin notes, extracted notes, or reading traces, use `zcli item annotations ITEMKEY --format json`, `zcli item notes ITEMKEY --format json`, and `zcli recap reading`.
-- If the user asks about collections, tags, library organization, or "what do I have about X", use `zcli search list`, `zcli collection list/items`, and `zcli tags list/items`.
-- If the user asks what they recently read, start with `zcli recap reading --from DATE --to DATE --format json`, then use the included compact lfz overlay as hints.
-- If the user asks what they discussed with llm-for-zotero or Claude Code, use `zcli recap lfz --limit 8 --format json`, `zcli lfz turns --item ITEMKEY`, or `zcli lfz turn MESSAGE_REF`.
+- Paper identity from title, short title, citation key, DOI, arXiv, URL, filename, or vague reference -> `zcli resolve QUERY --format json`.
+- Topic-like or fuzzy paper request -> `zcli find paper QUERY --format json`; use the best hit's `item.key`.
+- Repeated or broad paper search -> `zcli index status --format json`, then `zcli index search QUERY --format json`.
+- If indexed search is missing and the task needs passage/full-paper search, run `zcli index update --include-full-text --format json`; otherwise run `zcli index update --format json`.
+- Passage search -> `zcli index chunks QUERY --format json`. Add `--item ITEMKEY` for one paper, `--collection NAME` for a collection scope, or `--tag TAG` for a tagged slice.
+- Expand one passage -> use the hit's `expand_command` or `zcli index chunk CHUNK_ID --format json`.
+- Compact paper surface -> `zcli paper ITEMKEY --format json`.
+- Agent reading context -> `zcli context ITEMKEY --budget 40k --format json`.
+- Full Markdown paper surface -> `zcli item markdown ITEMKEY --format text`.
+- Annotations -> `zcli item annotations ITEMKEY --format json`.
+- Notes -> `zcli item notes ITEMKEY --format json`.
+- Reading recap -> `zcli recap reading --from DATE --to DATE --format json`.
+- llm-for-zotero recap -> `zcli recap lfz --limit 8 --format json`.
+- One previous turn -> follow `turn_command` or call `zcli lfz turn MESSAGE_REF --format json`.
 
-## Paper Reading Behavior
+## Reading Behavior
 
-- Prefer Zotero item identity over local filenames. Resolve to an item key before doing deep paper work.
-- Prefer structured Zotero metadata first, then Markdown/full text, then targeted search. Do not dump huge paper text into context when a smaller `context` or `search context` call is enough.
-- Treat `metadata_modified` in reading recaps as a touched-paper fallback, not proof that the user read the paper.
-- For broad paper questions, one `paper` or `context` call is usually enough.
-- For specific claims, methods, results, figures, tables, equations, or datasets, use `zcli index chunks "query" --item ITEMKEY --format json` before reading a whole Markdown paper. Fall back to `zcli item markdown` or `zcli search context ITEMKEY "query" --format json` only when the passage hits are insufficient.
-- For multi-paper work, resolve all papers first, then compare from metadata/abstracts/Markdown rather than crawling runtime folders.
+Resolve the Zotero item first. Prefer compact context before full Markdown. Use targeted passage search for exact claims, equations, figures, tables, metrics, datasets, method details, and limitations.
 
-## llm-for-zotero Conversation Behavior
+Treat `index search` as paper-candidate search and `index chunks` as passage-candidate search. Chunk hits may include `page` or `page_label`; those are best-effort page labels from Zotero annotations or PDF page separators. A missing page means the source text has no reliable page marker, not that the passage is invalid.
 
-- Compact lfz recap rows may be truncated. Check `text_truncated`, `text_chars`, `text_excerpt_chars`, and `text_full_included`.
-- For broad recaps, treat `zcli recap lfz` as an index. Read `text_policy`, `expand_policy`, and `paper_groups` before deciding whether one turn needs expansion.
-- To expand one turn, follow `turn_command` from the recap row or call `zcli lfz turn MESSAGE_REF --format json`.
-- `zcli lfz turn` returns the full question, matching answer messages, and matching agent final text. Do not request trace/event payloads; zcli intentionally exposes event counts only.
-- Do not use `--details`, `--full-text`, or `--include-contexts` for broad recap prompts. Use single-turn expansion instead.
-- If llm-for-zotero is unavailable or partially migrated, keep normal Zotero commands working and report the lfz state cleanly.
+For multi-paper work, resolve all papers first, compare from Zotero metadata and paper surfaces, then deepen only where the user's question requires it.
+
+When answering from passage hits, preserve the paper identity and page label when available.
+
+## Conversation Recaps
+
+Treat `zcli recap lfz` as an index, not as full conversation memory. Expand one turn only when needed through `turn_command` or `zcli lfz turn MESSAGE_REF --format json`.
+
+Do not request trace payloads or runtime event internals. `zcli` exposes compact event counts only.
 
 ## Write Safety
 
-- Core Zotero reads are local and read-only.
-- For any tag, collection, note, attachment, import, rename, or trash action, run the matching `zcli write ... --dry-run --format json` first.
-- Use `--execute` only when the user explicitly asks to perform that write in the current turn.
-- Never call the helper plugin HTTP endpoint directly. If execution is needed, check `zcli helper doctor --format json` first.
+Reads are safe by default.
 
-## Common Calls
+For tags, notes, attachments, imports, metadata edits, collection changes, or trash operations, use `zcli write ... --dry-run --format json` first. Use `--execute` only when the user explicitly asks to perform the write in the current turn.
 
-```bash
-zcli doctor --format json
-zcli lfz doctor --format json
+Never call the helper plugin HTTP endpoint directly. If execution is needed, check `zcli helper doctor --format json` first.
 
-zcli resolve "title / short title / citation key / DOI / arXiv / URL / file path" --format json
-zcli find paper "agentic rl survey" --format json
-zcli index status --format json
-zcli index search "agentic rl survey" --format json
-zcli index chunks "credit assignment" --item ITEMKEY --format json
-zcli index chunks "context compression" --collection "Agent Papers" --format json
-zcli index chunk ITEMKEY:annotation:2 --format json
-zcli index get ITEMKEY --format json
-zcli paper ITEMKEY --format json
-zcli context ITEMKEY --budget 40k --format json
-zcli item markdown ITEMKEY --format text
-zcli search context ITEMKEY "method OR figure OR dataset" --format json
+## Answering
 
-zcli item annotations ITEMKEY --format json
-zcli item notes ITEMKEY --format json
-zcli item attachments ITEMKEY --format json
-zcli item bibtex ITEMKEY --format json
-
-zcli search list "topic or keyword" --format json
-zcli collection list --format json
-zcli tags list --format json
-zcli recent --days 7 --format json
-
-zcli recap reading --from today --to today --format json
-zcli recap reading --item ITEMKEY --from today --to today --format json
-zcli recap lfz --from today --to today --limit 8 --format json
-zcli recap lfz --item ITEMKEY --from today --to today --limit 8 --format json
-zcli lfz turns --item ITEMKEY --format json
-zcli lfz turn claude:123 --format json
-
-zcli write tags ITEMKEY --add review --dry-run --format json
-zcli write note ITEMKEY --content "reading note" --dry-run --format json
-zcli helper doctor --format json
-```
-
-## Answering Style
-
-Use Zotero metadata and paper text as the source of truth. Mention `zcli` only when command provenance matters; otherwise present the result as Zotero-backed paper/library context.
+Use Zotero metadata and paper text as the source of truth. Mention `zcli` only when command provenance matters; otherwise answer as normal Zotero-backed research context.
