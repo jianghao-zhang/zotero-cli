@@ -159,6 +159,9 @@ var ZcliHelper = {
       "apply_tags",
       "move_to_collection",
       "create_note",
+      "import_identifiers",
+      "import_pdfs",
+      "import_urls",
       "import_local_files",
       "link_attachment",
       "rename_attachment",
@@ -189,6 +192,12 @@ var ZcliHelper = {
         return this.moveToCollection(params, dryRun, compact);
       case "create_note":
         return this.createNote(params, dryRun, compact);
+      case "import_identifiers":
+        return this.importIdentifiers(params, dryRun, compact);
+      case "import_pdfs":
+        return this.importPdfs(params, dryRun, compact);
+      case "import_urls":
+        return this.importUrls(params, dryRun, compact);
       case "import_local_files":
         return this.importLocalFiles(params, dryRun, compact);
       case "link_attachment":
@@ -385,6 +394,513 @@ var ZcliHelper = {
     note.setNote(html);
     var itemID = await note.saveTx();
     return { ok: true, op: "create_note", dry_run: false, compact, itemID, parentID: parent ? parent.id : null };
+  },
+
+  collectionIDsFromParams(params) {
+    var libraryID = this.libraryID(params);
+    var raw = [];
+    for (var name of ["collectionIDs", "collectionIds", "collectionID", "collectionId", "collectionKeys", "collectionKey", "collections", "collectionNames", "collectionName"]) {
+      var value = params[name];
+      if (value === undefined || value === null) continue;
+      if (Array.isArray(value)) raw.push(...value);
+      else raw.push(value);
+    }
+    var ids = [];
+    for (var input of raw) {
+      var value = String(input).trim();
+      if (!value) continue;
+      var collection = null;
+      if (/^\d+$/.test(value)) {
+        collection = Zotero.Collections.get(Number(value));
+      }
+      if (!collection && /^[A-Z0-9]{8}$/.test(value) && Zotero.Collections.getByLibraryAndKey) {
+        collection = Zotero.Collections.getByLibraryAndKey(libraryID, value);
+      }
+      if (!collection) {
+        var matches = Zotero.Collections.getByLibrary(libraryID, true, false)
+          .filter((candidate) => candidate.name.toLowerCase() === value.toLowerCase());
+        if (matches.length > 1) {
+          throw new Error("collection name is ambiguous: " + value);
+        }
+        collection = matches[0] || null;
+      }
+      if (!collection) throw new Error("collection not found: " + value);
+      if (!ids.includes(collection.id)) ids.push(collection.id);
+    }
+    return ids;
+  },
+
+  async addTagsToItem(item, tags) {
+    if (!item || !tags || !tags.length) return;
+    var changed = false;
+    for (var tag of tags) {
+      tag = String(tag || "").trim();
+      if (!tag || item.hasTag(tag)) continue;
+      item.addTag(tag, 0);
+      changed = true;
+    }
+    if (changed) await item.saveTx();
+  },
+
+  importResultItem(item, extra, compact) {
+    return Object.assign(this.resultItem(item, extra, compact), {
+      itemType: item.itemType || "",
+      title: item.getDisplayTitle ? item.getDisplayTitle() : item.getField("title"),
+    });
+  },
+
+  safeSetField(item, field, value) {
+    if (value === undefined || value === null || value === "") return false;
+    try {
+      item.setField(field, value);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  },
+
+  identifierFromSpec(spec) {
+    var input;
+    var kind;
+    var value;
+    if (spec && typeof spec === "object" && !Array.isArray(spec)) {
+      input = String(spec.input || spec.value || "");
+      kind = String(spec.kind || spec.type || "").toLowerCase();
+      value = String(spec.value || spec.identifier || input || "").trim();
+    } else {
+      input = String(spec || "");
+      value = input.trim();
+      kind = "";
+    }
+    var clean = value.trim();
+    if (!clean) throw new Error("empty identifier");
+
+    var arxivURL = clean.match(/arxiv\.org\/(?:abs|pdf)\/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?|[a-z-]+(?:\.[A-Z]{2})?\/[0-9]{7}(?:v[0-9]+)?)(?:\.pdf)?/i);
+    if (arxivURL) {
+      kind = "arxiv";
+      clean = arxivURL[1];
+    }
+    var arxivPrefix = clean.match(/^arxiv[:\s]+(.+)$/i);
+    if (arxivPrefix) {
+      kind = "arxiv";
+      clean = arxivPrefix[1].trim();
+    }
+    if (kind === "arxiv" || /^[0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?$/i.test(clean) || /^[a-z-]+(?:\.[A-Z]{2})?\/[0-9]{7}(?:v[0-9]+)?$/i.test(clean)) {
+      return { input, kind: "arxiv", value: clean, zotero: { arXiv: clean } };
+    }
+
+    var doiURL = clean.match(/^https?:\/\/(?:dx\.)?doi\.org\/(.+)$/i);
+    if (doiURL) {
+      kind = "doi";
+      clean = decodeURIComponent(doiURL[1]);
+    }
+    var doiMatch = clean.match(/\b(10\.[0-9]{4,9}\/[^\s"'<>]+[^\s"'<>.,;:)])/i);
+    if (kind === "doi" || doiMatch) {
+      clean = doiMatch ? doiMatch[1] : clean;
+      return { input, kind: "doi", value: clean, zotero: { DOI: clean } };
+    }
+
+    if (kind === "pmid") return { input, kind, value: clean, zotero: { PMID: clean } };
+    if (kind === "isbn") return { input, kind, value: clean, zotero: { ISBN: clean } };
+    if (kind === "ads" || kind === "adsbibcode") {
+      return { input, kind: "adsBibcode", value: clean, zotero: { adsBibcode: clean } };
+    }
+
+    var extracted = Zotero.Utilities.extractIdentifiers(clean);
+    if (extracted && extracted.length) {
+      return this.identifierFromObject(input, extracted[0]);
+    }
+    throw new Error("could not recognize identifier: " + clean);
+  },
+
+  identifierFromObject(input, identifier) {
+    if (identifier.arXiv) return { input, kind: "arxiv", value: identifier.arXiv, zotero: { arXiv: identifier.arXiv } };
+    if (identifier.DOI) return { input, kind: "doi", value: identifier.DOI, zotero: { DOI: identifier.DOI } };
+    if (identifier.PMID) return { input, kind: "pmid", value: identifier.PMID, zotero: { PMID: identifier.PMID } };
+    if (identifier.ISBN) return { input, kind: "isbn", value: identifier.ISBN, zotero: { ISBN: identifier.ISBN } };
+    if (identifier.adsBibcode) return { input, kind: "adsBibcode", value: identifier.adsBibcode, zotero: { adsBibcode: identifier.adsBibcode } };
+    throw new Error("unsupported identifier object");
+  },
+
+  xmlFirst(parent, localName) {
+    if (!parent) return null;
+    if (parent.getElementsByTagNameNS) {
+      var nsNodes = parent.getElementsByTagNameNS("*", localName);
+      if (nsNodes && nsNodes.length) return nsNodes[0];
+    }
+    var nodes = parent.getElementsByTagName(localName);
+    return nodes && nodes.length ? nodes[0] : null;
+  },
+
+  xmlText(parent, localName) {
+    var node = this.xmlFirst(parent, localName);
+    return node && node.textContent ? node.textContent.replace(/\s+/g, " ").trim() : "";
+  },
+
+  xmlTexts(parent, localName) {
+    if (!parent) return [];
+    var nodes = parent.getElementsByTagNameNS
+      ? parent.getElementsByTagNameNS("*", localName)
+      : parent.getElementsByTagName(localName);
+    return Array.from(nodes || [])
+      .map((node) => (node.textContent || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+  },
+
+  async fetchArxivMetadata(arxivID) {
+    var url = "https://export.arxiv.org/api/query?id_list=" + encodeURIComponent(arxivID);
+    var response = await Zotero.HTTP.request("GET", url, { timeout: 60000 });
+    var text = response.responseText || response.response || "";
+    var doc = new DOMParser().parseFromString(text, "application/xml");
+    var entry = this.xmlFirst(doc, "entry");
+    if (!entry) throw new Error("arXiv API returned no entry for " + arxivID);
+
+    var idURL = this.xmlText(entry, "id");
+    var match = idURL.match(/arxiv\.org\/abs\/([^/?#]+)/i);
+    var normalizedID = match ? match[1] : arxivID;
+    var links = entry.getElementsByTagNameNS
+      ? entry.getElementsByTagNameNS("*", "link")
+      : entry.getElementsByTagName("link");
+    var pdfURL = "";
+    for (var link of Array.from(links || [])) {
+      if (String(link.getAttribute("title") || "").toLowerCase() === "pdf" || String(link.getAttribute("type") || "").toLowerCase() === "application/pdf") {
+        pdfURL = link.getAttribute("href") || "";
+        break;
+      }
+    }
+    if (!pdfURL) pdfURL = "https://arxiv.org/pdf/" + normalizedID;
+
+    var categories = [];
+    var categoryNodes = entry.getElementsByTagNameNS
+      ? entry.getElementsByTagNameNS("*", "category")
+      : entry.getElementsByTagName("category");
+    for (var category of Array.from(categoryNodes || [])) {
+      var term = category.getAttribute("term");
+      if (term && !categories.includes(term)) categories.push(term);
+    }
+
+    return {
+      arxivID: normalizedID,
+      title: this.xmlText(entry, "title"),
+      abstractNote: this.xmlText(entry, "summary"),
+      date: (this.xmlText(entry, "published") || this.xmlText(entry, "updated")).slice(0, 10),
+      authors: this.xmlTexts(entry, "name"),
+      doi: this.xmlText(entry, "doi"),
+      url: "https://arxiv.org/abs/" + normalizedID,
+      pdfURL,
+      categories,
+    };
+  },
+
+  async importArxivFallback(identifier, libraryID, collections, tags, saveAttachments, compact) {
+    var meta = await this.fetchArxivMetadata(identifier.value);
+    var itemType = Zotero.ItemTypes.getID("preprint") ? "preprint" : "journalArticle";
+    var item = new Zotero.Item(itemType);
+    item.libraryID = libraryID;
+    this.safeSetField(item, "title", meta.title);
+    this.safeSetField(item, "abstractNote", meta.abstractNote);
+    this.safeSetField(item, "date", meta.date);
+    this.safeSetField(item, "url", meta.url);
+    this.safeSetField(item, "DOI", meta.doi);
+    this.safeSetField(item, "archive", "arXiv");
+    this.safeSetField(item, "archiveLocation", meta.arxivID);
+    this.safeSetField(item, "repository", "arXiv");
+    var extra = ["arXiv: " + meta.arxivID];
+    if (meta.categories.length) extra.push("arXiv categories: " + meta.categories.join(", "));
+    this.safeSetField(item, "extra", extra.join("\n"));
+    if (meta.authors.length) {
+      item.setCreators(
+        meta.authors.map((name) => {
+          var creator = Zotero.Utilities.cleanAuthor(name, "author", false);
+          creator.creatorType = "author";
+          return creator;
+        }),
+      );
+    }
+    if (collections && collections.length) item.setCollections(collections);
+    await item.saveTx();
+    await this.addTagsToItem(item, tags);
+
+    var attachments = [];
+    if (saveAttachments && meta.pdfURL) {
+      try {
+        var attachment = await Zotero.Attachments.importFromURL({
+          url: meta.pdfURL,
+          parentItemID: item.id,
+          title: "Full Text PDF",
+          contentType: "application/pdf",
+        });
+        attachments.push(this.importResultItem(attachment, { kind: "pdf" }, compact));
+      } catch (error) {
+        attachments.push({
+          kind: "pdf",
+          status: "attachment_error",
+          error: error && error.message ? error.message : String(error),
+        });
+      }
+    }
+    return { item, attachments, source: "arxiv_api_fallback" };
+  },
+
+  async existingItemsForIdentifier(identifier, libraryID, compact) {
+    var items = await Zotero.Items.getAll(libraryID, true, false);
+    var value = String(identifier.value || "").toLowerCase();
+    var matches = [];
+    for (var item of items) {
+      if (item.isAttachment && item.isAttachment()) continue;
+      var found = false;
+      if (identifier.kind === "doi") {
+        found = String(item.getField("DOI") || "").toLowerCase() === value;
+      } else if (identifier.kind === "arxiv") {
+        var haystack = [
+          item.getField("extra"),
+          item.getField("url"),
+          item.getField("DOI"),
+          item.getField("title"),
+        ].filter(Boolean).join("\n").toLowerCase();
+        found = haystack.includes(value) || haystack.includes("arxiv:" + value) || haystack.includes("/abs/" + value);
+      } else if (identifier.kind === "isbn") {
+        found = String(item.getField("ISBN") || "").toLowerCase().includes(value);
+      } else {
+        var text = [item.getField("extra"), item.getField("url")].filter(Boolean).join("\n").toLowerCase();
+        found = text.includes(value);
+      }
+      if (found) matches.push(this.importResultItem(item, null, compact));
+      if (matches.length >= 3) break;
+    }
+    return matches;
+  },
+
+  async importIdentifiers(params, dryRun, compact) {
+    var raw = params.identifiers || params.ids || [];
+    if (!Array.isArray(raw)) throw new Error("identifiers array required");
+    var libraryID = this.libraryID(params);
+    var collections = this.collectionIDsFromParams(params);
+    var tags = params.tags || [];
+    var saveAttachments = params.saveAttachments !== false;
+    var allowDuplicates = params.allowDuplicates === true;
+    var results = [];
+    for (var spec of raw) {
+      var identifier = this.identifierFromSpec(spec);
+      var existing = allowDuplicates ? [] : await this.existingItemsForIdentifier(identifier, libraryID, compact);
+      if (existing.length) {
+        results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "skipped_existing", existing });
+        continue;
+      }
+      if (dryRun) {
+        results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "would_import" });
+        continue;
+      }
+      var translate = new Zotero.Translate.Search();
+      translate.setIdentifier(identifier.zotero);
+      var translators = await translate.getTranslators();
+      if (!translators.length) {
+        if (identifier.kind === "arxiv") {
+          try {
+            var fallback = await this.importArxivFallback(identifier, libraryID, collections, tags, saveAttachments, compact);
+            results.push({
+              input: identifier.input,
+              kind: identifier.kind,
+              value: identifier.value,
+              status: "imported",
+              source: fallback.source,
+              items: [this.importResultItem(fallback.item, null, compact)],
+              attachments: fallback.attachments,
+            });
+          } catch (error) {
+            results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "error", error: error && error.message ? error.message : String(error) });
+          }
+        } else {
+          results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "no_translator" });
+        }
+        continue;
+      }
+      translate.setTranslator(translators);
+      var items = [];
+      var source = "zotero_translator";
+      try {
+        items = await translate.translate({ libraryID, collections, saveAttachments });
+      } catch (error) {
+        if (identifier.kind === "arxiv") {
+          try {
+            var fallbackImport = await this.importArxivFallback(identifier, libraryID, collections, tags, saveAttachments, compact);
+            items = [fallbackImport.item];
+            source = fallbackImport.source;
+            results.push({
+              input: identifier.input,
+              kind: identifier.kind,
+              value: identifier.value,
+              status: "imported",
+              source,
+              translator_error: error && error.message ? error.message : String(error),
+              items: items.map((item) => this.importResultItem(item, null, compact)),
+              attachments: fallbackImport.attachments,
+            });
+            continue;
+          } catch (fallbackError) {
+            results.push({
+              input: identifier.input,
+              kind: identifier.kind,
+              value: identifier.value,
+              status: "error",
+              error: error && error.message ? error.message : String(error),
+              fallback_error: fallbackError && fallbackError.message ? fallbackError.message : String(fallbackError),
+            });
+            continue;
+          }
+        }
+        results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "error", error: error && error.message ? error.message : String(error) });
+        continue;
+      }
+      for (var item of items) {
+        await this.addTagsToItem(item, tags);
+      }
+      results.push({
+        input: identifier.input,
+        kind: identifier.kind,
+        value: identifier.value,
+        status: items.length ? "imported" : "no_items_returned",
+        source,
+        items: items.map((item) => this.importResultItem(item, null, compact)),
+      });
+    }
+    return { ok: true, op: "import_identifiers", dry_run: dryRun, compact, count: results.length, items: results };
+  },
+
+  async importPdfs(params, dryRun, compact) {
+    var sources = params.sources || params.files || [];
+    if (!Array.isArray(sources)) throw new Error("sources array required");
+    var libraryID = this.libraryID(params);
+    var collections = this.collectionIDsFromParams(params);
+    var tags = params.tags || [];
+    var recognize = params.recognize !== false;
+    var results = [];
+    for (var source of sources) {
+      var input = String((source && source.path) || (source && source.url) || source || "");
+      if (!input) continue;
+      if (/^https?:\/\//i.test(input)) {
+        if (dryRun) {
+          results.push({ input, kind: "pdf_url", status: "would_import", recognize });
+        } else {
+          results.push(await this.importPdfUrl(input, libraryID, collections, tags, recognize, compact));
+        }
+        continue;
+      }
+      var exists = await IOUtils.exists(input);
+      if (dryRun || !exists) {
+        results.push({ input, kind: "local_pdf", status: exists ? "would_import" : "not_found", recognize });
+        continue;
+      }
+      var attachment = await Zotero.Attachments.importFromFile({ file: input, libraryID, collections });
+      results.push(await this.finishImportedAttachment(input, "local_pdf", attachment, tags, recognize, compact));
+    }
+    return { ok: true, op: "import_pdfs", dry_run: dryRun, compact, count: results.length, items: results };
+  },
+
+  async importUrls(params, dryRun, compact) {
+    var urls = params.urls || [];
+    if (!Array.isArray(urls)) throw new Error("urls array required");
+    var libraryID = this.libraryID(params);
+    var collections = this.collectionIDsFromParams(params);
+    var tags = params.tags || [];
+    var results = [];
+    for (var url of urls) {
+      url = String(url || "").trim();
+      if (!url) continue;
+      try {
+        var identifier = this.identifierFromSpec(url);
+        if (dryRun) {
+          results.push({ input: url, kind: identifier.kind, value: identifier.value, status: "would_import_identifier" });
+        } else {
+          var imported = await this.importIdentifiers({ identifiers: [{ input: url, kind: identifier.kind, value: identifier.value }], tags, collections, saveAttachments: true }, false, compact);
+          results.push(Object.assign({ input: url, via: "identifier" }, imported.items[0] || {}));
+        }
+        continue;
+      } catch (_) {}
+      if (this.isProbablyPdfUrl(url)) {
+        if (dryRun) results.push({ input: url, kind: "pdf_url", status: "would_import" });
+        else results.push(await this.importPdfUrl(url, libraryID, collections, tags, true, compact));
+        continue;
+      }
+      if (dryRun) {
+        results.push({ input: url, kind: "web_url", status: "would_translate_or_create_webpage" });
+        continue;
+      }
+      results.push(await this.importWebUrl(url, libraryID, collections, tags, compact));
+    }
+    return { ok: true, op: "import_urls", dry_run: dryRun, compact, count: results.length, items: results };
+  },
+
+  isProbablyPdfUrl(url) {
+    return /\.pdf(?:$|[?#])/i.test(url) || /\/pdf\//i.test(url);
+  },
+
+  async importPdfUrl(url, libraryID, collections, tags, recognize, compact) {
+    var attachment = await Zotero.Attachments.importFromURL({ url, libraryID, collections });
+    return this.finishImportedAttachment(url, "pdf_url", attachment, tags, recognize, compact);
+  },
+
+  async finishImportedAttachment(input, kind, attachment, tags, recognize, compact) {
+    var recognition = recognize ? "not_supported" : "not_requested";
+    var parent = null;
+    if (recognize && Zotero.RecognizeDocument && Zotero.RecognizeDocument.canRecognize(attachment)) {
+      recognition = "attempted";
+      await Zotero.RecognizeDocument.recognizeItems([attachment]);
+      attachment = await Zotero.Items.getAsync(attachment.id);
+      var parentID = attachment.parentItemID || attachment.parentID || null;
+      if (parentID) {
+        parent = await Zotero.Items.getAsync(parentID);
+        recognition = "recognized";
+      } else {
+        recognition = "no_match";
+      }
+    }
+    await this.addTagsToItem(parent || attachment, tags);
+    return {
+      input,
+      kind,
+      status: "imported",
+      recognition,
+      item: parent ? this.importResultItem(parent, { role: "parent" }, compact) : null,
+      attachment: this.importResultItem(attachment, { role: "attachment" }, compact),
+    };
+  },
+
+  async importWebUrl(url, libraryID, collections, tags, compact) {
+    var hiddenBrowser = null;
+    try {
+      var { HiddenBrowser } = ChromeUtils.importESModule("chrome://zotero/content/HiddenBrowser.mjs");
+      hiddenBrowser = new HiddenBrowser({ docShell: { allowImages: true } });
+      await hiddenBrowser.load(url, { requireSuccessfulStatus: true });
+      var doc = await hiddenBrowser.getDocument();
+      var translate = new Zotero.Translate.Web();
+      translate.setDocument(doc);
+      translate.setHandler("select", function (translate, items, callback) {
+        var selected = {};
+        for (var id in items) selected[id] = items[id];
+        callback(selected);
+      });
+      var translators = await translate.getTranslators();
+      if (translators.length) {
+        translate.setTranslator(translators);
+        var items = await translate.translate({ libraryID, collections, saveAttachments: true });
+        for (var item of items) {
+          await this.addTagsToItem(item, tags);
+        }
+        return { input: url, kind: "web_url", status: "imported", translator_count: translators.length, items: items.map((item) => this.importResultItem(item, null, compact)) };
+      }
+      var item = new Zotero.Item("webpage");
+      item.libraryID = libraryID;
+      item.setField("title", doc.title || url);
+      item.setField("url", url);
+      item.setField("accessDate", "CURRENT_TIMESTAMP");
+      if (collections.length) item.setCollections(collections);
+      await item.saveTx();
+      await this.addTagsToItem(item, tags);
+      return { input: url, kind: "web_url", status: "created_webpage", items: [this.importResultItem(item, null, compact)] };
+    } finally {
+      if (hiddenBrowser) hiddenBrowser.destroy();
+    }
   },
 
   async importLocalFiles(params, dryRun, compact) {

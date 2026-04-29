@@ -89,6 +89,10 @@ pub enum Commands {
         #[command(subcommand)]
         command: WriteCommands,
     },
+    Import {
+        #[command(subcommand)]
+        command: ImportCommands,
+    },
     Recent(RecentArgs),
     Mirror {
         #[command(subcommand)]
@@ -354,6 +358,73 @@ pub enum WriteCommands {
     RenameAttachment(WriteRenameAttachmentArgs),
     ImportFiles(WriteImportFilesArgs),
     Trash(WriteTrashArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ImportCommands {
+    Arxiv(ImportIdentifiersArgs),
+    Ids(ImportIdentifiersArgs),
+    Pdf(ImportPdfArgs),
+    Url(ImportUrlArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ImportIdentifiersArgs {
+    pub identifiers: Vec<String>,
+    #[arg(long = "collection", help = "Collection key, id, or exact name")]
+    pub collections: Vec<String>,
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    #[arg(
+        long,
+        help = "Allow Zotero to create duplicates instead of skipping exact local matches"
+    )]
+    pub allow_duplicates: bool,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub execute: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ImportPdfArgs {
+    pub sources: Vec<String>,
+    #[arg(long = "collection", help = "Collection key, id, or exact name")]
+    pub collections: Vec<String>,
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    #[arg(
+        long,
+        help = "Import the PDF as a standalone attachment without metadata recognition"
+    )]
+    pub no_recognize: bool,
+    #[arg(
+        long,
+        help = "Allow Zotero to create duplicates instead of skipping exact local matches"
+    )]
+    pub allow_duplicates: bool,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub execute: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ImportUrlArgs {
+    pub urls: Vec<String>,
+    #[arg(long = "collection", help = "Collection key, id, or exact name")]
+    pub collections: Vec<String>,
+    #[arg(long = "tag")]
+    pub tags: Vec<String>,
+    #[arg(
+        long,
+        help = "Allow Zotero to create duplicates instead of skipping exact local matches"
+    )]
+    pub allow_duplicates: bool,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub execute: bool,
 }
 
 #[derive(Debug, Args)]
@@ -805,6 +876,7 @@ pub fn dispatch(cli: &Cli, context: &Context) -> Result<Value> {
         Commands::Collection { command } => dispatch_collection(context, command),
         Commands::Tags { command } => dispatch_tags(context, command),
         Commands::Write { command } => dispatch_write(context, command),
+        Commands::Import { command } => dispatch_import(context, command),
         Commands::Recent(args) => {
             let db = ZoteroDb::open(&context.config)?;
             Ok(json!({
@@ -875,6 +947,8 @@ fn examples() -> Result<Value> {
             {"name": "markdown source status", "command": "zcli markdown status ITEMKEY --format pretty"},
             {"name": "today recap", "command": "zcli recap today --format pretty"},
             {"name": "llm-for-zotero turns for one paper", "command": "zcli lfz turns --item ITEMKEY --format json"},
+            {"name": "preview arXiv import", "command": "zcli import arxiv 2604.06240 --dry-run"},
+            {"name": "preview PDF import and metadata recognition", "command": "zcli import pdf ./paper.pdf --dry-run"},
             {"name": "mirror with paper.md", "command": "zcli --mirror-root ~/ZoteroMirror mirror sync --write-markdown"},
             {"name": "agent skill check", "command": "zcli skill doctor --format pretty"},
             {"name": "Zotero helper plugin check", "command": "zcli helper doctor --format pretty"},
@@ -1415,6 +1489,378 @@ fn dispatch_write(context: &Context, command: &WriteCommands) -> Result<Value> {
             )
         }
     }
+}
+
+fn dispatch_import(context: &Context, command: &ImportCommands) -> Result<Value> {
+    match command {
+        ImportCommands::Arxiv(args) => {
+            dispatch_import_identifiers(context, args, Some("arxiv"), "arxiv")
+        }
+        ImportCommands::Ids(args) => dispatch_import_identifiers(context, args, None, "ids"),
+        ImportCommands::Pdf(args) => dispatch_import_pdfs(context, args),
+        ImportCommands::Url(args) => dispatch_import_urls(context, args),
+    }
+}
+
+fn dispatch_import_identifiers(
+    context: &Context,
+    args: &ImportIdentifiersArgs,
+    forced_kind: Option<&str>,
+    command_name: &str,
+) -> Result<Value> {
+    require_write_intent(args.dry_run, args.execute)?;
+    if args.identifiers.is_empty() {
+        return Err(anyhow!("pass at least one identifier"));
+    }
+    let db = ZoteroDb::open(&context.config).ok();
+    let mut plan = Vec::new();
+    let mut helper_identifiers = Vec::new();
+    for input in &args.identifiers {
+        let identifier = normalize_identifier(input, forced_kind)?;
+        let existing = existing_matches(db.as_ref(), &identifier.value, identifier.exact_score);
+        let skipped = !args.allow_duplicates && !existing.is_empty();
+        if !skipped {
+            helper_identifiers.push(json!({
+                "input": input,
+                "kind": identifier.kind,
+                "value": identifier.value,
+            }));
+        }
+        plan.push(json!({
+            "input": input,
+            "kind": identifier.kind,
+            "value": identifier.value,
+            "status": if skipped { "skip_existing" } else { "import" },
+            "existing_matches": existing,
+        }));
+    }
+    let preview = json!({
+        "mode": "paper_identifier_import",
+        "sources": plan,
+        "collections": args.collections,
+        "tags": args.tags,
+        "allow_duplicates": args.allow_duplicates,
+        "duplicate_check": if db.is_some() { "local_zotero_db" } else { "unavailable" },
+        "zotero_native_path": "Zotero.Translate.Search / Add Item by Identifier",
+        "execute_command": format!("zcli import {command_name} <identifiers...> --execute"),
+    });
+    import_or_execute(
+        context,
+        args.dry_run,
+        "import_identifiers",
+        json!({
+            "identifiers": helper_identifiers,
+            "collections": args.collections,
+            "tags": args.tags,
+            "allowDuplicates": args.allow_duplicates,
+            "saveAttachments": true,
+        }),
+        preview,
+    )
+}
+
+fn dispatch_import_pdfs(context: &Context, args: &ImportPdfArgs) -> Result<Value> {
+    require_write_intent(args.dry_run, args.execute)?;
+    if args.sources.is_empty() {
+        return Err(anyhow!("pass at least one PDF path or URL"));
+    }
+    let db = ZoteroDb::open(&context.config).ok();
+    let mut plan = Vec::new();
+    let mut helper_sources = Vec::new();
+    for input in &args.sources {
+        let source = normalize_pdf_source(input);
+        let existing = existing_matches(db.as_ref(), &source.duplicate_query, 85);
+        let skipped = !args.allow_duplicates && !existing.is_empty();
+        if !skipped {
+            helper_sources.push(match source.kind.as_str() {
+                "pdf_url" => json!({ "url": source.value }),
+                _ => json!({ "path": source.value }),
+            });
+        }
+        plan.push(json!({
+            "input": input,
+            "kind": source.kind,
+            "value": source.value,
+            "exists": source.exists,
+            "status": if skipped {
+                "skip_existing"
+            } else if source.kind == "local_pdf" && !source.exists {
+                "not_found"
+            } else {
+                "import"
+            },
+            "existing_matches": existing,
+        }));
+    }
+    let preview = json!({
+        "mode": "paper_pdf_import",
+        "sources": plan,
+        "collections": args.collections,
+        "tags": args.tags,
+        "recognize_metadata": !args.no_recognize,
+        "allow_duplicates": args.allow_duplicates,
+        "duplicate_check": if db.is_some() { "local_zotero_db" } else { "unavailable" },
+        "zotero_native_path": "Zotero.Attachments.importFromFile/importFromURL + Zotero.RecognizeDocument",
+        "execute_command": "zcli import pdf <paths-or-urls...> --execute",
+    });
+    import_or_execute(
+        context,
+        args.dry_run,
+        "import_pdfs",
+        json!({
+            "sources": helper_sources,
+            "collections": args.collections,
+            "tags": args.tags,
+            "recognize": !args.no_recognize,
+        }),
+        preview,
+    )
+}
+
+fn dispatch_import_urls(context: &Context, args: &ImportUrlArgs) -> Result<Value> {
+    require_write_intent(args.dry_run, args.execute)?;
+    if args.urls.is_empty() {
+        return Err(anyhow!("pass at least one URL"));
+    }
+    let db = ZoteroDb::open(&context.config).ok();
+    let mut plan = Vec::new();
+    let mut helper_urls = Vec::new();
+    for input in &args.urls {
+        let url = input.trim();
+        if url.is_empty() {
+            continue;
+        }
+        let identifier = normalize_identifier(url, None).ok();
+        let (kind, query, exact_score) = identifier
+            .as_ref()
+            .map(|identifier| {
+                (
+                    identifier.kind.clone(),
+                    identifier.value.clone(),
+                    identifier.exact_score,
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    if is_probably_pdf_url(url) {
+                        "pdf_url".to_string()
+                    } else {
+                        "web_url".to_string()
+                    },
+                    url.to_string(),
+                    90,
+                )
+            });
+        let existing = existing_matches(db.as_ref(), &query, exact_score);
+        let skipped = !args.allow_duplicates && !existing.is_empty();
+        if !skipped {
+            helper_urls.push(url.to_string());
+        }
+        plan.push(json!({
+            "input": input,
+            "kind": kind,
+            "normalized": query,
+            "status": if skipped { "skip_existing" } else { "import" },
+            "existing_matches": existing,
+        }));
+    }
+    let preview = json!({
+        "mode": "paper_url_import",
+        "sources": plan,
+        "collections": args.collections,
+        "tags": args.tags,
+        "allow_duplicates": args.allow_duplicates,
+        "duplicate_check": if db.is_some() { "local_zotero_db" } else { "unavailable" },
+        "zotero_native_path": "identifier translator, PDF import/recognition, or web translator fallback",
+        "execute_command": "zcli import url <urls...> --execute",
+    });
+    import_or_execute(
+        context,
+        args.dry_run,
+        "import_urls",
+        json!({
+            "urls": helper_urls,
+            "collections": args.collections,
+            "tags": args.tags,
+        }),
+        preview,
+    )
+}
+
+fn import_or_execute(
+    context: &Context,
+    dry_run: bool,
+    op: &str,
+    params: Value,
+    preview: Value,
+) -> Result<Value> {
+    if dry_run {
+        return Ok(json!({
+            "ok": true,
+            "dry_run": true,
+            "helper_required_for_execute": true,
+            "helper_op": op,
+            "params": params,
+            "preview": preview,
+        }));
+    }
+    let empty = params
+        .get("identifiers")
+        .or_else(|| params.get("sources"))
+        .or_else(|| params.get("urls"))
+        .and_then(Value::as_array)
+        .map(|values| values.is_empty())
+        .unwrap_or(false);
+    if empty {
+        return Ok(json!({
+            "ok": true,
+            "dry_run": false,
+            "helper_op": op,
+            "executed": false,
+            "reason": "all requested sources matched existing local Zotero items",
+            "params": params,
+            "preview": preview,
+        }));
+    }
+    let result = helper::call(&context.config, op, params.clone())?;
+    Ok(json!({
+        "ok": true,
+        "dry_run": false,
+        "helper_op": op,
+        "params": params,
+        "result": result,
+    }))
+}
+
+struct NormalizedIdentifier {
+    kind: String,
+    value: String,
+    exact_score: i64,
+}
+
+struct NormalizedPdfSource {
+    kind: String,
+    value: String,
+    duplicate_query: String,
+    exists: bool,
+}
+
+fn normalize_identifier(input: &str, forced_kind: Option<&str>) -> Result<NormalizedIdentifier> {
+    let raw = input.trim();
+    if raw.is_empty() {
+        return Err(anyhow!("empty identifier"));
+    }
+    if forced_kind == Some("arxiv") {
+        return Ok(NormalizedIdentifier {
+            kind: "arxiv".to_string(),
+            value: normalize_arxiv_id(raw)?,
+            exact_score: 94,
+        });
+    }
+    if let Ok(arxiv) = normalize_arxiv_id(raw) {
+        return Ok(NormalizedIdentifier {
+            kind: "arxiv".to_string(),
+            value: arxiv,
+            exact_score: 94,
+        });
+    }
+    if let Some(doi) = normalize_doi(raw) {
+        return Ok(NormalizedIdentifier {
+            kind: "doi".to_string(),
+            value: doi,
+            exact_score: 95,
+        });
+    }
+    Ok(NormalizedIdentifier {
+        kind: "identifier".to_string(),
+        value: raw.to_string(),
+        exact_score: 90,
+    })
+}
+
+fn normalize_arxiv_id(input: &str) -> Result<String> {
+    let raw = input.trim();
+    let url_re = regex::Regex::new(
+        r"(?i)arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7}(?:v[0-9]+)?)(?:\.pdf)?",
+    )?;
+    if let Some(captures) = url_re.captures(raw) {
+        return Ok(captures[1].to_string());
+    }
+    let prefixed = regex::Regex::new(r"(?i)^arxiv[:\s]+(.+)$")?;
+    let candidate = prefixed
+        .captures(raw)
+        .map(|captures| captures[1].trim().to_string())
+        .unwrap_or_else(|| raw.to_string());
+    let candidate = candidate.trim_end_matches(".pdf");
+    let plain = regex::Regex::new(
+        r"(?i)^([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7}(?:v[0-9]+)?)$",
+    )?;
+    if plain.is_match(candidate) {
+        Ok(candidate.to_string())
+    } else {
+        Err(anyhow!("not an arXiv identifier: {input}"))
+    }
+}
+
+fn normalize_doi(input: &str) -> Option<String> {
+    let mut raw = input.trim();
+    if let Some(rest) = raw
+        .strip_prefix("https://doi.org/")
+        .or_else(|| raw.strip_prefix("http://doi.org/"))
+        .or_else(|| raw.strip_prefix("https://dx.doi.org/"))
+        .or_else(|| raw.strip_prefix("http://dx.doi.org/"))
+    {
+        raw = rest;
+    }
+    let re = regex::Regex::new(r#"(?i)\b(10\.[0-9]{4,9}/[^\s"'<>{}]+[^\s"'<>{}.,;:)])"#).ok()?;
+    re.captures(raw).map(|captures| captures[1].to_string())
+}
+
+fn normalize_pdf_source(input: &str) -> NormalizedPdfSource {
+    let raw = input.trim();
+    if is_probably_http_url(raw) {
+        return NormalizedPdfSource {
+            kind: "pdf_url".to_string(),
+            value: raw.to_string(),
+            duplicate_query: raw.to_string(),
+            exists: true,
+        };
+    }
+    let path = PathBuf::from(raw);
+    let canonical = path.canonicalize().unwrap_or(path);
+    let exists = canonical.exists();
+    NormalizedPdfSource {
+        kind: "local_pdf".to_string(),
+        value: canonical.display().to_string(),
+        duplicate_query: canonical.display().to_string(),
+        exists,
+    }
+}
+
+fn existing_matches(db: Option<&ZoteroDb>, query: &str, exact_score: i64) -> Vec<Value> {
+    let Some(db) = db else {
+        return Vec::new();
+    };
+    db.resolve_items(query, 5)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|value| {
+            value
+                .get("score")
+                .and_then(Value::as_i64)
+                .map(|score| score >= exact_score)
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+fn is_probably_http_url(value: &str) -> bool {
+    value.starts_with("http://") || value.starts_with("https://")
+}
+
+fn is_probably_pdf_url(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    lower.contains("/pdf/") || lower.ends_with(".pdf") || lower.contains(".pdf?")
 }
 
 fn require_write_intent(dry_run: bool, execute: bool) -> Result<()> {

@@ -1,20 +1,22 @@
 ---
 name: zotero-cli
-description: Use when an external agent needs portable Zotero library access through zcli for search, local paper index lookup, metadata, paper Markdown, notes, annotations, reading recaps, optional llm-for-zotero recaps, or dry-run-first Zotero writes. Applies to Codex, Claude Code, Hermes, OpenClaw, and other agents.
+description: Use whenever the user asks Codex to use Zotero, zcli, zotero-cli, or the local Zotero library; find, search, read, summarize, compare, cite, or inspect papers; locate papers by topic, title, short title, citation key, DOI, arXiv, URL, or filename; import arXiv/DOI/PDF/URL papers; search paper passages or page-level evidence; read notes, annotations, collections, tags, recent reading, reading recaps, or llm-for-zotero conversations; or perform dry-run-first Zotero writes through zcli.
 ---
 
 # Zotero CLI
 
-Use this skill when working with a user's Zotero library through `zcli` from a normal external-agent runtime.
+Use this skill when working with a user's Zotero library through `zcli` from Codex or another external-agent runtime.
 
 ## Rules
 
 - Call `zcli` directly. Do not call an MCP server, adapter API, or HTTP bridge for Zotero access.
 - Prefer JSON output: pass `--format json` unless the user explicitly wants human-readable text.
 - Core Zotero commands are local and read-only by default. Treat any import, mutation, or inbox execution path as dry-run-first.
-- For Zotero writes, use `zcli write ... --dry-run` first. Use `--execute` only when the user explicitly asked to perform the change in the current turn. Never call the helper plugin endpoint directly.
+- For Zotero writes or imports, use `zcli write ... --dry-run` or `zcli import ... --dry-run` first. Use `--execute` only when the user explicitly asked to perform the change in the current turn. Never call the helper plugin endpoint directly.
 - Use `zcli helper doctor --format json` to check the optional Zotero helper plugin before executing local Zotero-runtime writes.
 - Treat helper execute results as compact by default. Fetch normal item details with `zcli item get ITEMKEY --format json` when more metadata is needed after a write.
+- For paper imports, prefer `zcli import arxiv ...` for arXiv IDs, `zcli import ids ...` for DOI/ISBN/PMID/ADS identifiers, `zcli import pdf ...` for local or remote PDFs, and `zcli import url ...` for mixed paper URLs. Dry-run output is the duplicate/import plan; execute output should be followed by `zcli item get KEY --format json` for any item the answer depends on.
+- arXiv imports use Zotero's native translator first. If Zotero returns no item, the helper can fall back to arXiv Atom metadata and attach the PDF, still through Zotero runtime APIs.
 - Do not assume `llm-for-zotero` exists. Use `zcli lfz doctor` before `zcli recap lfz`.
 - When the user gives a title, short title, citation key, DOI, arXiv ID, URL, or file path instead of a Zotero key, call `zcli resolve QUERY --format json` first.
 - When the user gives a topic-like or fuzzy paper request, call `zcli find paper QUERY --format json` and then use `item.key` from the best hit.
@@ -62,6 +64,10 @@ zcli lfz turns --item ITEMKEY --format json
 zcli recap lfz --from today --to today --limit 8 --format json
 zcli recap lfz --item ITEMKEY --from today --to today --limit 8 --format json
 zcli lfz turn claude:123 --format json
+zcli import arxiv 2604.06240 --dry-run --format json
+zcli import ids 10.1145/1234567.1234568 --dry-run --format json
+zcli import pdf ./paper.pdf --dry-run --format json
+zcli import url https://arxiv.org/abs/2604.06240 --dry-run --format json
 zcli write tags ITEMKEY --add review --dry-run --format json
 zcli write note ITEMKEY --content "reading note" --dry-run --format json
 zcli write attach ITEMKEY ./paper.pdf --mode link --dry-run --format json
@@ -75,6 +81,8 @@ zcli inbox status --format json
 ## Output Use
 
 For paper identity, prefer `key`, `citation_key`, `title`, `short_title`, `authors`, `year`, `doi`, `arxiv`, and `url`.
+
+For import results, preserve `status`, `source`, and the returned Zotero `key`. Treat `source: "zotero_translator"` and `source: "arxiv_api_fallback"` as successful Zotero-native imports, but verify important metadata with `zcli item get`.
 
 For recap provenance, preserve the exact `provenance` value. `metadata_modified` is only a fallback touched-paper signal, not definite reading.
 

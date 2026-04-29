@@ -237,6 +237,100 @@ fn write_commands_preview_without_running_helper() -> anyhow::Result<()> {
 }
 
 #[test]
+fn import_commands_preview_without_running_helper() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+
+    fixture
+        .cmd()?
+        .args(["import", "arxiv", "2604.06240"])
+        .assert()
+        .failure();
+
+    let output = fixture
+        .cmd()?
+        .args(["import", "arxiv", "2601.12345", "--dry-run"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["helper_op"], "import_identifiers");
+    assert_eq!(value["preview"]["sources"][0]["status"], "skip_existing");
+    assert_eq!(value["params"]["identifiers"].as_array().unwrap().len(), 0);
+
+    let output = fixture
+        .cmd()?
+        .args([
+            "import",
+            "arxiv",
+            "https://arxiv.org/abs/2604.06240",
+            "--collection",
+            "Agent Papers",
+            "--tag",
+            "unread",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["preview"]["sources"][0]["kind"], "arxiv");
+    assert_eq!(value["preview"]["sources"][0]["value"], "2604.06240");
+    assert_eq!(value["params"]["identifiers"][0]["kind"], "arxiv");
+    assert_eq!(value["params"]["collections"][0], "Agent Papers");
+    assert_eq!(value["params"]["tags"][0], "unread");
+
+    let new_pdf = fixture._dir.path().join("new-paper.pdf");
+    std::fs::write(&new_pdf, "new pdf")?;
+    let output = fixture
+        .cmd()?
+        .arg("import")
+        .arg("pdf")
+        .arg(&new_pdf)
+        .args(["--dry-run"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["helper_op"], "import_pdfs");
+    assert_eq!(value["preview"]["recognize_metadata"], true);
+    assert_eq!(value["preview"]["sources"][0]["kind"], "local_pdf");
+    assert_eq!(value["preview"]["sources"][0]["exists"], true);
+    assert_eq!(
+        value["params"]["sources"][0]["path"],
+        new_pdf.canonicalize()?.display().to_string()
+    );
+
+    let output = fixture
+        .cmd()?
+        .args([
+            "import",
+            "url",
+            "https://doi.org/10.1234/example",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["helper_op"], "import_urls");
+    assert_eq!(value["preview"]["sources"][0]["kind"], "doi");
+    assert_eq!(value["preview"]["sources"][0]["status"], "skip_existing");
+    assert_eq!(value["params"]["urls"].as_array().unwrap().len(), 0);
+
+    Ok(())
+}
+
+#[test]
 fn search_and_item_commands_read_local_fixture() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
     let output = fixture

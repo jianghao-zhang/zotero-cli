@@ -140,6 +140,7 @@ Output defaults to `auto`:
 | Recaps | `recap reading`, `recap today`, `recap week`, `recap lfz` | Date-range reading activity and optional lfz conversation recap. |
 | lfz drill-down | `lfz doctor`, `lfz turns`, `lfz turn` | Checks lfz tables and retrieves specific question/final-answer turns. |
 | Mirror | `mirror status`, `mirror rebuild`, `mirror sync`, `mirror watch`, `mirror daemon-install` | Generates and maintains a filesystem mirror of the Zotero library. |
+| Paper import | `import arxiv`, `import ids`, `import pdf`, `import url` | Dry-run-first high-level paper import through Zotero native translators, PDF import, and PDF metadata recognition. |
 | Local writes | `write tags`, `write collection`, `write note`, `write attach`, `write rename-attachment`, `write import-files`, `write trash` | Dry-run-first write plans; execution requires the optional Zotero helper plugin. |
 | UI handoff | `open`, `reveal` | Dry-run-first commands for opening or revealing Zotero items/files. |
 | Agent export | `export pack` | Builds a paper pack for [Codex](https://github.com/openai/codex), [Claude Code](https://code.claude.com/docs), [Hermes Agent](https://github.com/nousresearch/hermes-agent), or [OpenClaw](https://github.com/openclaw/openclaw) style workflows. |
@@ -184,6 +185,17 @@ zcli index get ITEMKEY
 ```
 
 The index is a generated local sidecar in zcli's cache directory. It currently uses SQLite FTS5/BM25 over Zotero metadata, identifiers, short titles, citation keys, tags, collections, abstracts, notes, annotations, and optional full text. `index search` is optimized for paper candidates and does not rank every full-text page. `index chunks` returns passage candidates and can be scoped by item, collection, or tag. Chunk hits include best-effort page labels when they come from Zotero annotations or PDF page separators; missing pages mean the source text had no reliable page marker. `--include-full-text` adds extracted attachment text to the chunk layer when you want full-paper passage search. Future local embedding/reranker layers should attach to this index instead of replacing the CLI surface.
+
+Preview paper imports before touching Zotero:
+
+```bash
+zcli import arxiv 2604.06240 --dry-run
+zcli import ids 10.1145/1234567.1234568 --dry-run
+zcli import pdf ./paper.pdf --dry-run
+zcli import url https://arxiv.org/abs/2604.06240 --dry-run
+```
+
+`import arxiv` and `import ids` use Zotero's Add Item by Identifier translator path. For arXiv, the helper falls back to arXiv Atom metadata plus PDF attachment if Zotero returns no item. `import pdf` copies a local or remote PDF through Zotero and asks Zotero to recognize metadata unless `--no-recognize` is set. `import url` first detects identifier-style URLs, then PDF URLs, then falls back to Zotero web translators or a webpage item.
 
 Read item data:
 
@@ -383,6 +395,9 @@ zcli helper install --execute
 Write commands:
 
 ```bash
+zcli import arxiv 2604.06240 --dry-run
+zcli import pdf ./paper.pdf --dry-run
+zcli import url https://arxiv.org/abs/2604.06240 --dry-run
 zcli write tags ITEMKEY --add "review" --remove "old-tag" --dry-run
 zcli write collection ITEMKEY --collection COLLECTIONKEY --action add --dry-run
 zcli write note ITEMKEY --title "Reading note" --content "..." --dry-run
@@ -397,6 +412,7 @@ Current helper capabilities are whitelisted:
 
 | Capability | Notes |
 | --- | --- |
+| Paper imports | Import arXiv/DOI/ISBN/PubMed/ADS identifiers, local/remote PDFs, and URLs through Zotero native translator/recognition paths. arXiv has a helper-side Atom metadata/PDF fallback when Zotero returns no item. |
 | Tags | Add/remove tags. |
 | Collections | Add/remove item membership. |
 | Notes | Create child notes. |

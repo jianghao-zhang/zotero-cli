@@ -50,6 +50,11 @@ pub fn call(config: &Config, op: &str, params: Value) -> Result<Value> {
             token_path.display()
         ));
     }
+    let timeout = if op.starts_with("import_") {
+        Duration::from_secs(120)
+    } else {
+        Duration::from_secs(2)
+    };
     helper_post(
         &config.helper.endpoint,
         json!({
@@ -59,6 +64,7 @@ pub fn call(config: &Config, op: &str, params: Value) -> Result<Value> {
             "compact": true,
             "params": params,
         }),
+        timeout,
     )
 }
 
@@ -75,6 +81,7 @@ pub fn doctor(config: &Config) -> Result<Value> {
         helper_post(
             &config.helper.endpoint,
             json!({"op": "ping", "token": token}),
+            Duration::from_secs(2),
         )
     });
     let (status, response, error, unauthenticated_response) = match (ping, status_probe) {
@@ -118,6 +125,9 @@ pub fn doctor(config: &Config) -> Result<Value> {
             "apply_tags",
             "move_to_collection",
             "create_note",
+            "import_identifiers",
+            "import_pdfs",
+            "import_urls",
             "import_local_files",
             "link_attachment",
             "rename_attachment",
@@ -345,15 +355,20 @@ fn select_profile(requested: Option<PathBuf>, profiles: &[PathBuf]) -> Result<Op
     }
 }
 
-fn helper_post(endpoint: &str, payload: Value) -> Result<Value> {
-    helper_request(endpoint, "POST", Some(payload))
+fn helper_post(endpoint: &str, payload: Value, timeout: Duration) -> Result<Value> {
+    helper_request(endpoint, "POST", Some(payload), timeout)
 }
 
 fn helper_get(endpoint: &str) -> Result<Value> {
-    helper_request(endpoint, "GET", None)
+    helper_request(endpoint, "GET", None, Duration::from_secs(2))
 }
 
-fn helper_request(endpoint: &str, method: &str, payload: Option<Value>) -> Result<Value> {
+fn helper_request(
+    endpoint: &str,
+    method: &str,
+    payload: Option<Value>,
+    timeout: Duration,
+) -> Result<Value> {
     let target = parse_http_endpoint(endpoint)?;
     let body = payload
         .map(|value| serde_json::to_string(&value))
@@ -365,7 +380,7 @@ fn helper_request(endpoint: &str, method: &str, payload: Option<Value>) -> Resul
             target.host, target.port
         )
     })?;
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     stream.set_nodelay(true)?;
     if method == "POST" {

@@ -1,6 +1,6 @@
 ---
 name: zotero-cli
-description: Use inside llm-for-zotero Claude Code mode when the agent needs Zotero-native access to papers, selected or pinned paper context, paper text, notes, annotations, collections, tags, reading history, or llm-for-zotero conversation recaps through zcli.
+description: Use inside llm-for-zotero Claude Code mode when the agent needs Zotero-native access to papers, selected or pinned paper context, paper text, notes, annotations, collections, tags, reading history, paper import, or llm-for-zotero conversation recaps through zcli.
 ---
 
 # Zotero Native Access via zcli
@@ -29,6 +29,7 @@ Do not start from runtime folders, project files, `.claude` files, or generic fi
 - Reading recap -> `zcli recap reading --from DATE --to DATE --format json`.
 - llm-for-zotero recap -> `zcli recap lfz --limit 8 --format json`.
 - One previous turn -> follow `turn_command` or call `zcli lfz turn MESSAGE_REF --format json`.
+- Import a paper by arXiv/DOI/PDF/URL -> `zcli import arxiv|ids|pdf|url ... --dry-run --format json` first.
 
 ## Reading Behavior
 
@@ -40,6 +41,12 @@ For multi-paper work, resolve all papers first, compare from Zotero metadata and
 
 When answering from passage hits, preserve the paper identity and page label when available.
 
+## Import Behavior
+
+For user-requested paper imports, preview first with `zcli import ... --dry-run --format json`. Execute only after the user explicitly asked for import in the current turn and `zcli helper doctor --format json` reports the helper as available.
+
+Use `import arxiv` for arXiv IDs, `import ids` for DOI/ISBN/PMID/ADS identifiers, `import pdf` for PDFs, and `import url` for arXiv/DOI/PDF/web URLs. arXiv imports try Zotero's native translator first and may fall back to arXiv Atom metadata plus PDF attachment through Zotero runtime APIs. After execute, verify important metadata with `zcli item get KEY --format json`.
+
 ## Conversation Recaps
 
 Treat `zcli recap lfz` as an index, not as full conversation memory. Expand one turn only when needed through `turn_command` or `zcli lfz turn MESSAGE_REF --format json`.
@@ -50,7 +57,7 @@ Do not request trace payloads or runtime event internals. `zcli` exposes compact
 
 Reads are safe by default.
 
-For tags, notes, attachments, imports, metadata edits, collection changes, or trash operations, use `zcli write ... --dry-run --format json` first. Use `--execute` only when the user explicitly asks to perform the write in the current turn.
+For tags, notes, attachments, imports, metadata edits, collection changes, or trash operations, use `zcli write ... --dry-run --format json` or `zcli import ... --dry-run --format json` first. Use `--execute` only when the user explicitly asks to perform the write in the current turn.
 
 Never call the helper plugin HTTP endpoint directly. If execution is needed, check `zcli helper doctor --format json` first.
 
