@@ -408,6 +408,8 @@ fn local_index_update_search_and_get_fixture() -> anyhow::Result<()> {
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["ok"], true);
     assert_eq!(value["indexed"], 1);
+    assert_eq!(value["chunks_indexed"], 3);
+    assert_eq!(value["chunks_with_page"], 1);
     assert_eq!(value["models_required"], false);
 
     let output = fixture
@@ -453,6 +455,39 @@ fn local_index_update_search_and_get_fixture() -> anyhow::Result<()> {
     assert_eq!(value["item"]["key"], "ITEM0001");
     assert_eq!(value["item"]["short_title"], "Agent Memory");
     assert_eq!(value["truncated"]["abstract"], false);
+
+    let output = fixture
+        .cmd()?
+        .args(["index", "chunks", "annotation memory", "--item", "ITEM0001"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["backend"], "sqlite_fts5_bm25_chunks");
+    assert_eq!(value["hits"][0]["item"]["key"], "ITEM0001");
+    assert_eq!(value["hits"][0]["source"], "annotation");
+    assert_eq!(value["hits"][0]["page"], "1");
+    assert_eq!(value["hits"][0]["has_page"], true);
+    let chunk_id = value["hits"][0]["chunk_id"].as_str().unwrap().to_string();
+
+    let output = fixture
+        .cmd()?
+        .args(["index", "chunk", &chunk_id])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["chunk_id"], chunk_id);
+    assert_eq!(value["source"], "annotation");
+    assert_eq!(value["page"], "1");
+    assert!(value["text"]
+        .as_str()
+        .unwrap()
+        .contains("annotation about memory"));
     Ok(())
 }
 

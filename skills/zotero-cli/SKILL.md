@@ -18,7 +18,10 @@ Use this skill when working with a user's Zotero library through `zcli` from a n
 - Do not assume `llm-for-zotero` exists. Use `zcli lfz doctor` before `zcli recap lfz`.
 - When the user gives a title, short title, citation key, DOI, arXiv ID, URL, or file path instead of a Zotero key, call `zcli resolve QUERY --format json` first.
 - When the user gives a topic-like or fuzzy paper request, call `zcli find paper QUERY --format json` and then use `item.key` from the best hit.
-- When repeated broad search is needed, check `zcli index status --format json`; if the index exists, prefer `zcli index search QUERY --format json` before falling back to `zcli find paper`.
+- When repeated broad search is needed, check `zcli index status --format json`; if the index exists, prefer `zcli index search QUERY --format json` for paper candidates before falling back to `zcli find paper`.
+- For fuzzy passage search, use `zcli index chunks QUERY --format json`. Add `--item ITEMKEY` for one paper, `--collection NAME` for a folder-like scope, or `--tag TAG` for a tagged slice of the library. If full-paper passages are missing, ask the user to run `zcli index update --include-full-text --format json`.
+- Treat `index chunks` results as passage candidates. Use `page`/`page_label` when present, but respect `page_policy`: missing pages mean the source text has no reliable page marker.
+- To expand one passage, use the hit's `expand_command` or call `zcli index chunk CHUNK_ID --format json`.
 - Prefer `zcli paper ITEMKEY --format json` for a one-paper work surface, and `zcli context ITEMKEY --budget 40k --format json` when preparing agent context.
 - For "what did I read recently" or broad date-range recaps, use `zcli recap reading --from DATE --to DATE --format json` first. Treat llm-for-zotero as a bounded overlay, not the primary source.
 - `zcli recap reading` automatically includes compact llm-for-zotero hints when the user enabled lfz in zcli config; pass `--no-lfz` when the user asks for pure reading metadata only.
@@ -38,6 +41,9 @@ zcli find paper "agentic rl survey" --format json
 zcli index status --format json
 zcli index update --format json
 zcli index search "agentic rl survey" --format json
+zcli index chunks "credit assignment" --item ITEMKEY --format json
+zcli index chunks "context compression" --collection "Agent Papers" --format json
+zcli index chunk ITEMKEY:annotation:2 --format json
 zcli index get ITEMKEY --format json
 zcli paper ITEMKEY --format json
 zcli context ITEMKEY --budget 40k --format json

@@ -132,7 +132,7 @@ Output defaults to `auto`:
 | Config | `setup`, `config init`, `config status`, `config web-api` | Writes and inspects local config. |
 | Resolve and paper surface | `resolve`, `find paper`, `paper`, `context` | Finds an item from natural inputs such as title, short title, citation key, DOI, arXiv, URL, or file path; returns a compact paper view or builds an agent context pack. |
 | Search | `search list`, `search grep`, `search context` | Searches metadata/full text and returns matching context. |
-| Local paper index | `index status`, `index update`, `index search`, `index get` | Builds a local SQLite FTS5/BM25 sidecar index for repeated fast paper search. No network or model is required. |
+| Local paper index | `index status`, `index update`, `index search`, `index chunks`, `index chunk`, `index get` | Builds a local SQLite FTS5/BM25 sidecar index for repeated fast paper and passage search. No network or model is required. |
 | Item reads | `item get`, `item extract`, `item annotations`, `item notes`, `item attachments`, `item bibtex`, `item markdown` | Reads Zotero item metadata, extracted text, annotations, notes, attachments, BibTeX, and paper Markdown. |
 | Markdown status | `markdown status` | Shows whether Markdown will come from lfz MinerU cache or local fallback. |
 | Library browsing | `collection list`, `collection items`, `tags list`, `tags items`, `recent` | Lists collections, tags, tagged items, collection items, and recently touched papers. |
@@ -177,10 +177,13 @@ Build and search the local paper index:
 ```bash
 zcli index update
 zcli index search "agentic rl survey"
+zcli index chunks "credit assignment" --item ITEMKEY
+zcli index chunks "context compression" --collection "Agent Papers"
+zcli index chunk ITEMKEY:annotation:2
 zcli index get ITEMKEY
 ```
 
-The index is a generated local sidecar in zcli's cache directory. It currently uses SQLite FTS5/BM25 over Zotero metadata, identifiers, short titles, citation keys, tags, collections, abstracts, notes, and annotations. `--include-full-text` can add extracted attachment text when you want heavier full-paper search. Future semantic layers should attach to this index instead of replacing the CLI surface.
+The index is a generated local sidecar in zcli's cache directory. It currently uses SQLite FTS5/BM25 over Zotero metadata, identifiers, short titles, citation keys, tags, collections, abstracts, notes, annotations, and optional full text. `index search` is optimized for paper candidates and does not rank every full-text page. `index chunks` returns passage candidates and can be scoped by item, collection, or tag. Chunk hits include best-effort page labels when they come from Zotero annotations or PDF page separators; missing pages mean the source text had no reliable page marker. `--include-full-text` adds extracted attachment text to the chunk layer when you want full-paper passage search. Future local embedding/reranker layers should attach to this index instead of replacing the CLI surface.
 
 Read item data:
 

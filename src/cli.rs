@@ -232,6 +232,8 @@ pub enum IndexCommands {
     Update(IndexUpdateArgs),
     Rebuild(IndexUpdateArgs),
     Search(IndexSearchArgs),
+    Chunks(IndexChunkSearchArgs),
+    Chunk(IndexChunkGetArgs),
     Get(IndexGetArgs),
 }
 
@@ -253,6 +255,37 @@ pub struct IndexSearchArgs {
     pub limit: usize,
     #[arg(long, default_value_t = 420)]
     pub snippet_chars: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct IndexChunkSearchArgs {
+    pub query: String,
+    #[arg(
+        long,
+        help = "Limit chunk search to one Zotero key, citation key, or short title"
+    )]
+    pub item: Option<String>,
+    #[arg(
+        long,
+        help = "Limit chunk search to collections whose name contains this text"
+    )]
+    pub collection: Option<String>,
+    #[arg(
+        long,
+        help = "Limit chunk search to tags whose name contains this text"
+    )]
+    pub tag: Option<String>,
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
+    #[arg(long, default_value_t = 700)]
+    pub snippet_chars: usize,
+}
+
+#[derive(Debug, Args)]
+pub struct IndexChunkGetArgs {
+    pub chunk_id: String,
+    #[arg(long, default_value_t = 4000)]
+    pub max_chars: usize,
 }
 
 #[derive(Debug, Args)]
@@ -835,6 +868,7 @@ fn examples() -> Result<Value> {
             {"name": "hybrid paper finder", "command": "zcli find paper \"agentic rl survey\" --format json"},
             {"name": "build local paper index", "command": "zcli index update --format json"},
             {"name": "search local paper index", "command": "zcli index search \"agent memory\" --format json"},
+            {"name": "search paper passages", "command": "zcli index chunks \"agent memory\" --item ITEMKEY --format json"},
             {"name": "paper work surface", "command": "zcli paper ITEMKEY --format pretty"},
             {"name": "agent context pack", "command": "zcli context ITEMKEY --budget 40k --format json"},
             {"name": "raw markdown", "command": "zcli item markdown ITEMKEY --format text"},
@@ -1029,6 +1063,24 @@ fn dispatch_index(context: &Context, command: &IndexCommands) -> Result<Value> {
             &index::SearchOptions {
                 limit: args.limit,
                 snippet_chars: args.snippet_chars,
+            },
+        ),
+        IndexCommands::Chunks(args) => index::search_chunks(
+            &context.config,
+            &args.query,
+            &index::ChunkSearchOptions {
+                limit: args.limit,
+                snippet_chars: args.snippet_chars,
+                item: args.item.clone(),
+                collection: args.collection.clone(),
+                tag: args.tag.clone(),
+            },
+        ),
+        IndexCommands::Chunk(args) => index::get_chunk(
+            &context.config,
+            &args.chunk_id,
+            &index::ChunkGetOptions {
+                max_chars: args.max_chars,
             },
         ),
         IndexCommands::Get(args) => index::get(

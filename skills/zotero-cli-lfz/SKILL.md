@@ -17,7 +17,10 @@ Do not start by exploring the runtime folder, project files, `.claude` files, or
 
 - If the user gives a title, short title, citation key, DOI, arXiv ID, URL, filename, or vague paper reference, call `zcli resolve QUERY --format json`.
 - If the user gives a topic-like or fuzzy paper request, call `zcli find paper QUERY --format json` and then use `item.key` from the best hit.
-- When repeated broad search is needed, check `zcli index status --format json`; if the index exists, prefer `zcli index search QUERY --format json` before falling back to `zcli find paper`.
+- When repeated broad search is needed, check `zcli index status --format json`; if the index exists, prefer `zcli index search QUERY --format json` for paper candidates before falling back to `zcli find paper`.
+- For fuzzy passage search, use `zcli index chunks QUERY --format json`. Add `--item ITEMKEY` for one paper, `--collection NAME` for a folder-like scope, or `--tag TAG` for a tagged slice of the library. If full-paper passages are missing, ask the user to run `zcli index update --include-full-text --format json`.
+- Treat `index chunks` results as passage candidates. Use `page`/`page_label` when present, but respect `page_policy`: missing pages mean the source text has no reliable page marker.
+- To expand one passage, follow the hit's `expand_command` or call `zcli index chunk CHUNK_ID --format json`.
 - If you have an item key, call `zcli paper ITEMKEY --format json` for the compact Zotero-native paper surface.
 - If the user asks to understand, summarize, compare, review, explain, or reason about a paper, call `zcli context ITEMKEY --budget 40k --format json` or `zcli item markdown ITEMKEY --format text`.
 - If the user asks for exact paper text or the whole paper surface, prefer `zcli item markdown ITEMKEY --format text`. zcli will reuse llm-for-zotero MinerU `full.md` when available.
@@ -32,7 +35,7 @@ Do not start by exploring the runtime folder, project files, `.claude` files, or
 - Prefer structured Zotero metadata first, then Markdown/full text, then targeted search. Do not dump huge paper text into context when a smaller `context` or `search context` call is enough.
 - Treat `metadata_modified` in reading recaps as a touched-paper fallback, not proof that the user read the paper.
 - For broad paper questions, one `paper` or `context` call is usually enough.
-- For specific claims, methods, results, figures, tables, equations, or datasets, use `zcli item markdown` or `zcli search context ITEMKEY "query" --format json` before answering.
+- For specific claims, methods, results, figures, tables, equations, or datasets, use `zcli index chunks "query" --item ITEMKEY --format json` before reading a whole Markdown paper. Fall back to `zcli item markdown` or `zcli search context ITEMKEY "query" --format json` only when the passage hits are insufficient.
 - For multi-paper work, resolve all papers first, then compare from metadata/abstracts/Markdown rather than crawling runtime folders.
 
 ## llm-for-zotero Conversation Behavior
@@ -61,6 +64,9 @@ zcli resolve "title / short title / citation key / DOI / arXiv / URL / file path
 zcli find paper "agentic rl survey" --format json
 zcli index status --format json
 zcli index search "agentic rl survey" --format json
+zcli index chunks "credit assignment" --item ITEMKEY --format json
+zcli index chunks "context compression" --collection "Agent Papers" --format json
+zcli index chunk ITEMKEY:annotation:2 --format json
 zcli index get ITEMKEY --format json
 zcli paper ITEMKEY --format json
 zcli context ITEMKEY --budget 40k --format json

@@ -5,12 +5,16 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{
+    params, params_from_iter, types::Value as SqlValue, Connection, OpenFlags, OptionalExtension,
+};
 use serde_json::{json, Value};
 
 use crate::{config::Config, zotero::ZoteroDb};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
+const CHUNK_TARGET_CHARS: usize = 1_400;
+const CHUNK_OVERLAP_CHARS: usize = 160;
 
 #[derive(Debug, Clone)]
 pub struct IndexOptions {
@@ -25,7 +29,21 @@ pub struct SearchOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct ChunkSearchOptions {
+    pub limit: usize,
+    pub snippet_chars: usize,
+    pub item: Option<String>,
+    pub collection: Option<String>,
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct GetOptions {
+    pub max_chars: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChunkGetOptions {
     pub max_chars: usize,
 }
 
@@ -53,7 +71,12 @@ pub fn status(config: &Config) -> Result<Value> {
     if exists {
         let conn = open_readonly(&path)
             .with_context(|| format!("failed to open index {}", path.display()))?;
-        value["document_count"] = json!(table_count(&conn, "documents")?);
+        value["document_count"] = json!(optional_table_count(&conn, "documents")?);
+        value["chunk_count"] = json!(optional_table_count(&conn, "chunks")?);
+        value["chunks_with_page_count"] = json!(optional_scalar_i64(
+            &conn,
+            "SELECT COUNT(*) FROM chunks WHERE page IS NOT NULL AND page != ''",
+        )?);
         value["last_updated_at"] = json!(meta_value(&conn, "last_updated_at")?);
         value["source_db_path"] = json!(meta_value(&conn, "source_db_path")?);
         value["include_full_text"] = json!(meta_value(&conn, "include_full_text")?);
@@ -74,10 +97,14 @@ pub fn update(config: &Config, options: &IndexOptions) -> Result<Value> {
     let zotero = ZoteroDb::open(config)?;
     let items = zotero.list_items(None, usize::MAX)?;
     let tx = conn.transaction()?;
+    tx.execute("DELETE FROM chunks_fts", [])?;
+    tx.execute("DELETE FROM chunks", [])?;
     tx.execute("DELETE FROM documents_fts", [])?;
     tx.execute("DELETE FROM documents", [])?;
 
     let mut indexed = 0_usize;
+    let mut indexed_chunks = 0_usize;
+    let mut indexed_chunks_with_page = 0_usize;
     for item in items {
         let detail = zotero.item_detail_by_id(item.id)?;
         let abstract_text = detail
@@ -85,17 +112,19 @@ pub fn update(config: &Config, options: &IndexOptions) -> Result<Value> {
             .get("abstractNote")
             .cloned()
             .unwrap_or_default();
-        let notes_text = zotero
-            .notes_for_item(detail.summary.id)?
-            .into_iter()
-            .filter_map(|note| note.text)
+        let notes = zotero.notes_for_item(detail.summary.id)?;
+        let notes_text = notes
+            .iter()
+            .filter_map(|note| note.text.as_deref())
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
             .collect::<Vec<_>>()
             .join("\n\n");
-        let annotations_text = zotero
-            .annotations_for_item(detail.summary.id)?
-            .into_iter()
+        let annotations = zotero.annotations_for_item(detail.summary.id)?;
+        let annotations_text = annotations
+            .iter()
             .filter_map(|annotation| {
-                let text = [annotation.text, annotation.comment]
+                let text = [annotation.text.as_deref(), annotation.comment.as_deref()]
                     .into_iter()
                     .flatten()
                     .filter(|value| !value.trim().is_empty())
@@ -136,6 +165,7 @@ pub fn update(config: &Config, options: &IndexOptions) -> Result<Value> {
             detail.summary.short_title.as_deref(),
             detail.summary.title.as_deref(),
         ]);
+        let title_for_fts = detail.summary.title.clone().unwrap_or_default();
         let item_json = serde_json::to_string(&detail.summary)?;
         let tags_json = serde_json::to_string(&detail.tags)?;
         let collections_json = serde_json::to_string(&detail.collections)?;
@@ -182,10 +212,101 @@ pub fn update(config: &Config, options: &IndexOptions) -> Result<Value> {
               tags, collections, abstract, notes, annotations, body)
              SELECT item_id, key, COALESCE(citation_key, ''), COALESCE(short_title, ''),
                     COALESCE(title, ''), authors_text, COALESCE(year, ''), ?2, ?3,
-                    tags_text, collections_text, abstract_text, notes_text, annotations_text, body_text
+                    tags_text, collections_text, abstract_text, notes_text, annotations_text, ''
              FROM documents WHERE item_id = ?1",
             params![detail.summary.id, identifiers, aliases],
         )?;
+
+        let mut chunks = Vec::new();
+        push_source_chunks(
+            &mut chunks,
+            detail.summary.id,
+            &detail.summary.key,
+            "abstract",
+            None,
+            None,
+            &abstract_text,
+        );
+        for note in &notes {
+            if let Some(text) = note
+                .text
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                let source_ref = note.key.clone().or_else(|| Some(note.id.to_string()));
+                push_source_chunks(
+                    &mut chunks,
+                    detail.summary.id,
+                    &detail.summary.key,
+                    "note",
+                    source_ref.as_deref(),
+                    None,
+                    text,
+                );
+            }
+        }
+        for annotation in &annotations {
+            let text = [annotation.text.as_deref(), annotation.comment.as_deref()]
+                .into_iter()
+                .flatten()
+                .filter(|value| !value.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let source_ref = annotation
+                .attachment_key
+                .clone()
+                .or_else(|| Some(annotation.id.to_string()));
+            push_source_chunks(
+                &mut chunks,
+                detail.summary.id,
+                &detail.summary.key,
+                "annotation",
+                source_ref.as_deref(),
+                clean_optional(annotation.page.as_deref()).as_deref(),
+                &text,
+            );
+        }
+        push_body_chunks(
+            &mut chunks,
+            detail.summary.id,
+            &detail.summary.key,
+            &body_text,
+        );
+        for chunk in chunks {
+            let has_page = chunk.page.as_deref().is_some_and(|page| !page.is_empty());
+            tx.execute(
+                "INSERT INTO chunks
+                 (chunk_id, item_id, key, source, source_ref, page, start_char, end_char, text)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    &chunk.chunk_id,
+                    chunk.item_id,
+                    &chunk.key,
+                    &chunk.source,
+                    &chunk.source_ref,
+                    &chunk.page,
+                    chunk.start_char as i64,
+                    chunk.end_char as i64,
+                    &chunk.text,
+                ],
+            )?;
+            let chunk_rowid = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO chunks_fts (rowid, title, text, source, page)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    chunk_rowid,
+                    &title_for_fts,
+                    &chunk.text,
+                    &chunk.source,
+                    chunk.page.as_deref().unwrap_or_default(),
+                ],
+            )?;
+            indexed_chunks += 1;
+            if has_page {
+                indexed_chunks_with_page += 1;
+            }
+        }
         indexed += 1;
     }
 
@@ -218,6 +339,8 @@ pub fn update(config: &Config, options: &IndexOptions) -> Result<Value> {
         "backend": "sqlite_fts5_bm25",
         "strategy": "full_rebuild_local_sidecar",
         "indexed": indexed,
+        "chunks_indexed": indexed_chunks,
+        "chunks_with_page": indexed_chunks_with_page,
         "include_full_text": options.include_full_text,
         "max_chars": options.max_chars,
         "network_required": false,
@@ -309,6 +432,234 @@ pub fn search(config: &Config, query: &str, options: &SearchOptions) -> Result<V
     }))
 }
 
+pub fn search_chunks(config: &Config, query: &str, options: &ChunkSearchOptions) -> Result<Value> {
+    let path = index_path(config)?;
+    if !path.exists() {
+        anyhow::bail!(
+            "local index does not exist: {}; run zcli index update first",
+            path.display()
+        );
+    }
+    let conn =
+        open_readonly(&path).with_context(|| format!("failed to open index {}", path.display()))?;
+    if !index_table_exists(&conn, "chunks")? {
+        anyhow::bail!("chunk index is missing; run zcli index update first");
+    }
+
+    let fts_query = build_fts_query(query)?;
+    let mut clauses = vec!["chunks_fts MATCH ?1".to_string()];
+    let mut sql_params = vec![
+        SqlValue::Text(fts_query.clone()),
+        SqlValue::Integer(snippet_token_count(options.snippet_chars)),
+    ];
+    let mut next_param = 3;
+
+    if let Some(item) = clean_optional(options.item.as_deref()) {
+        clauses.push(format!(
+            "(LOWER(d.key) = LOWER(?{next_param}) OR LOWER(COALESCE(d.citation_key, '')) = LOWER(?{next_param}) OR LOWER(COALESCE(d.short_title, '')) = LOWER(?{next_param}))"
+        ));
+        sql_params.push(SqlValue::Text(item));
+        next_param += 1;
+    }
+    if let Some(collection) = clean_optional(options.collection.as_deref()) {
+        clauses.push(format!(
+            "LOWER(d.collections_text) LIKE '%' || LOWER(?{next_param}) || '%'"
+        ));
+        sql_params.push(SqlValue::Text(collection));
+        next_param += 1;
+    }
+    if let Some(tag) = clean_optional(options.tag.as_deref()) {
+        clauses.push(format!(
+            "LOWER(d.tags_text) LIKE '%' || LOWER(?{next_param}) || '%'"
+        ));
+        sql_params.push(SqlValue::Text(tag));
+        next_param += 1;
+    }
+
+    let candidate_limit = options.limit.saturating_mul(8).clamp(options.limit, 80);
+    let limit_param = next_param;
+    sql_params.push(SqlValue::Integer(candidate_limit as i64));
+
+    let sql = format!(
+        "SELECT c.chunk_id, c.source, c.source_ref, c.page, c.start_char, c.end_char, c.text,
+                d.item_json, d.tags_json, d.collections_json,
+                bm25(chunks_fts, 2.0, 1.0, 0.4, 1.5) AS rank,
+                snippet(chunks_fts, 1, '[', ']', '...', ?2) AS snippet
+         FROM chunks_fts
+         JOIN chunks c ON c.rowid = chunks_fts.rowid
+         JOIN documents d ON d.item_id = c.item_id
+         WHERE {}
+         ORDER BY rank
+         LIMIT ?{limit_param}",
+        clauses.join(" AND ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params_from_iter(sql_params), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, f64>(10)?,
+                row.get::<_, String>(11)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut hits = Vec::new();
+    for (
+        chunk_id,
+        source,
+        source_ref,
+        page,
+        start_char,
+        end_char,
+        text,
+        item_json,
+        tags_json,
+        collections_json,
+        rank,
+        snippet,
+    ) in rows
+    {
+        let item = serde_json::from_str::<Value>(&item_json)?;
+        let rank_score = bm25_score(rank);
+        let item_bonus = rerank_bonus(&item, query) * 0.35;
+        let has_page = page
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+        let page_bonus = if has_page { 0.03 } else { 0.0 };
+        let expand_command = format!("zcli index chunk {chunk_id} --format json");
+        hits.push(json!({
+            "chunk_id": chunk_id,
+            "item": item,
+            "tags": serde_json::from_str::<Value>(&tags_json)?,
+            "collections": serde_json::from_str::<Value>(&collections_json)?,
+            "source": source,
+            "source_ref": source_ref,
+            "page": page.clone(),
+            "page_label": page,
+            "has_page": has_page,
+            "start_char": start_char,
+            "end_char": end_char,
+            "rank": rank,
+            "score": rank_score + item_bonus + page_bonus,
+            "score_components": {
+                "bm25": rank_score,
+                "item_bonus": item_bonus,
+                "page_bonus": page_bonus,
+            },
+            "snippet": snippet,
+            "text": truncate_chars(&text, options.snippet_chars.max(600)),
+            "text_truncated": text.chars().count() > options.snippet_chars.max(600),
+            "expand_command": expand_command,
+        }));
+    }
+    hits.sort_by(|a, b| {
+        json_score(b)
+            .partial_cmp(&json_score(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    hits.truncate(options.limit);
+
+    Ok(json!({
+        "ok": true,
+        "query": query,
+        "query_fts": fts_query,
+        "backend": "sqlite_fts5_bm25_chunks",
+        "index_path": path,
+        "scope": {
+            "item": options.item.as_deref(),
+            "collection": options.collection.as_deref(),
+            "tag": options.tag.as_deref(),
+        },
+        "page_policy": {
+            "best_effort": true,
+            "sources": ["annotation_page_label", "pdf_form_feed"],
+            "missing_means": "source text has no reliable page marker"
+        },
+        "hits": hits,
+    }))
+}
+
+pub fn get_chunk(config: &Config, chunk_id: &str, options: &ChunkGetOptions) -> Result<Value> {
+    let path = index_path(config)?;
+    if !path.exists() {
+        anyhow::bail!(
+            "local index does not exist: {}; run zcli index update first",
+            path.display()
+        );
+    }
+    let conn =
+        open_readonly(&path).with_context(|| format!("failed to open index {}", path.display()))?;
+    let row = conn
+        .query_row(
+            "SELECT c.chunk_id, c.source, c.source_ref, c.page, c.start_char, c.end_char, c.text,
+                    d.item_json, d.tags_json, d.collections_json
+             FROM chunks c
+             JOIN documents d ON d.item_id = c.item_id
+             WHERE c.chunk_id = ?1
+             LIMIT 1",
+            [chunk_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| anyhow!("indexed chunk not found: {chunk_id}"))?;
+    let (
+        chunk_id,
+        source,
+        source_ref,
+        page,
+        start_char,
+        end_char,
+        text,
+        item_json,
+        tags_json,
+        collections_json,
+    ) = row;
+    let has_page = page
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    Ok(json!({
+        "ok": true,
+        "index_path": path,
+        "chunk_id": chunk_id,
+        "item": serde_json::from_str::<Value>(&item_json)?,
+        "tags": serde_json::from_str::<Value>(&tags_json)?,
+        "collections": serde_json::from_str::<Value>(&collections_json)?,
+        "source": source,
+        "source_ref": source_ref,
+        "page": page.clone(),
+        "page_label": page,
+        "has_page": has_page,
+        "start_char": start_char,
+        "end_char": end_char,
+        "text": truncate_chars(&text, options.max_chars),
+        "text_chars": text.chars().count(),
+        "text_truncated": text.chars().count() > options.max_chars,
+    }))
+}
+
 pub fn get(config: &Config, key: &str, options: &GetOptions) -> Result<Value> {
     let path = index_path(config)?;
     if !path.exists() {
@@ -377,6 +728,121 @@ pub fn get(config: &Config, key: &str, options: &GetOptions) -> Result<Value> {
     }))
 }
 
+#[derive(Debug, Clone)]
+struct IndexChunk {
+    chunk_id: String,
+    item_id: i64,
+    key: String,
+    source: String,
+    source_ref: Option<String>,
+    page: Option<String>,
+    start_char: usize,
+    end_char: usize,
+    text: String,
+}
+
+fn push_source_chunks(
+    chunks: &mut Vec<IndexChunk>,
+    item_id: i64,
+    key: &str,
+    source: &str,
+    source_ref: Option<&str>,
+    page: Option<&str>,
+    text: &str,
+) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    push_chunk_windows(chunks, item_id, key, source, source_ref, page, text, 0);
+}
+
+fn push_body_chunks(chunks: &mut Vec<IndexChunk>, item_id: i64, key: &str, text: &str) {
+    let text = text.trim();
+    if text.is_empty() {
+        return;
+    }
+    if text.contains('\u{000C}') {
+        let mut offset = 0_usize;
+        for (idx, page_text) in text.split('\u{000C}').enumerate() {
+            let page_text = page_text.trim();
+            if !page_text.is_empty() {
+                let page = (idx + 1).to_string();
+                push_chunk_windows(
+                    chunks,
+                    item_id,
+                    key,
+                    "body",
+                    None,
+                    Some(&page),
+                    page_text,
+                    offset,
+                );
+            }
+            offset += page_text.chars().count() + 1;
+        }
+    } else {
+        push_chunk_windows(chunks, item_id, key, "body", None, None, text, 0);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_chunk_windows(
+    chunks: &mut Vec<IndexChunk>,
+    item_id: i64,
+    key: &str,
+    source: &str,
+    source_ref: Option<&str>,
+    page: Option<&str>,
+    text: &str,
+    base_offset: usize,
+) {
+    let char_count = text.chars().count();
+    if char_count == 0 {
+        return;
+    }
+    let mut start = 0_usize;
+    let source_ref = clean_optional(source_ref);
+    let page = clean_optional(page);
+    while start < char_count {
+        let end = (start + CHUNK_TARGET_CHARS).min(char_count);
+        let segment = take_char_range(text, start, end).trim().to_string();
+        if !segment.is_empty() {
+            let ordinal = chunks.len();
+            chunks.push(IndexChunk {
+                chunk_id: format!("{key}:{source}:{ordinal}"),
+                item_id,
+                key: key.to_string(),
+                source: source.to_string(),
+                source_ref: source_ref.clone(),
+                page: page.clone(),
+                start_char: base_offset + start,
+                end_char: base_offset + end,
+                text: segment,
+            });
+        }
+        if end == char_count {
+            break;
+        }
+        start = end.saturating_sub(CHUNK_OVERLAP_CHARS);
+    }
+}
+
+fn take_char_range(value: &str, start: usize, end: usize) -> String {
+    value
+        .chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect()
+}
+
+fn clean_optional(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn configure_connection(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "journal_mode", "DELETE")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -409,7 +875,18 @@ fn sqlite_readonly_uri(path: &Path) -> String {
 }
 
 fn ensure_schema(conn: &Connection) -> Result<()> {
+    if current_schema_version(conn)? != Some(SCHEMA_VERSION) {
+        conn.execute_batch(
+            r#"
+            DROP TABLE IF EXISTS documents_fts;
+            DROP TABLE IF EXISTS chunks_fts;
+            DROP TABLE IF EXISTS chunks;
+            DROP TABLE IF EXISTS documents;
+            "#,
+        )?;
+    }
     conn.execute("DROP TABLE IF EXISTS documents_fts", [])?;
+    conn.execute("DROP TABLE IF EXISTS chunks_fts", [])?;
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS index_meta (
@@ -439,6 +916,20 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             content_chars INTEGER NOT NULL,
             indexed_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS chunks (
+            chunk_id TEXT NOT NULL UNIQUE,
+            item_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_ref TEXT,
+            page TEXT,
+            start_char INTEGER NOT NULL,
+            end_char INTEGER NOT NULL,
+            text TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_chunks_item_id ON chunks(item_id);
+        CREATE INDEX IF NOT EXISTS idx_chunks_chunk_id ON chunks(chunk_id);
+        CREATE INDEX IF NOT EXISTS idx_chunks_page ON chunks(page);
         CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
             key,
             citation_key,
@@ -455,6 +946,12 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             annotations,
             body
         );
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            title,
+            text,
+            source,
+            page
+        );
         "#,
     )?;
     Ok(())
@@ -467,6 +964,46 @@ fn table_count(conn: &Connection, table: &str) -> Result<i64> {
     conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
         row.get(0)
     })
+    .map_err(Into::into)
+}
+
+fn optional_table_count(conn: &Connection, table: &str) -> Result<Option<i64>> {
+    if !index_table_exists(conn, table)? {
+        return Ok(None);
+    }
+    table_count(conn, table).map(Some)
+}
+
+fn optional_scalar_i64(conn: &Connection, sql: &str) -> Result<Option<i64>> {
+    if !index_table_exists(conn, "chunks")? {
+        return Ok(None);
+    }
+    conn.query_row(sql, [], |row| row.get(0))
+        .optional()
+        .map_err(Into::into)
+}
+
+fn index_table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?1 LIMIT 1",
+        [table],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|value| value.is_some())
+    .map_err(Into::into)
+}
+
+fn current_schema_version(conn: &Connection) -> Result<Option<i64>> {
+    if !index_table_exists(conn, "index_meta")? {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT CAST(value AS INTEGER) FROM index_meta WHERE key = 'schema_version'",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
     .map_err(Into::into)
 }
 
