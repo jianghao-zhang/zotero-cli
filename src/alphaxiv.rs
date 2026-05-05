@@ -7,6 +7,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use ureq::Agent;
 
+use crate::import_plan;
+
 const API_BASE: &str = "https://api.alphaxiv.org";
 const WEB_BASE: &str = "https://www.alphaxiv.org";
 const PDF_BASE: &str = "https://fetcher.alphaxiv.org/v2/pdf";
@@ -204,6 +206,20 @@ pub struct BriefArgs {
     pub date_field: DateField,
     #[arg(long, default_value_t = 20)]
     pub timeout: u64,
+}
+
+struct DiscoveryPipeline<'a> {
+    query: &'a str,
+    limit: usize,
+    fallback_sort: FeedSort,
+    fallback_interval: &'a str,
+    topics: &'a [String],
+    min_likes: Option<i64>,
+    min_github_stars: Option<i64>,
+    min_visits: Option<i64>,
+    cutoff: Option<DateTime<Utc>>,
+    date_field: DateField,
+    triage: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1165,66 +1181,11 @@ fn filter_rank_papers(
 }
 
 fn paper_zotero_plan_from_normalized(paper: &Value) -> Value {
-    let alpha_id = paper
-        .get("alphaxiv_id")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let canonical_id = paper.get("canonical_id").and_then(Value::as_str);
-    let url = paper
-        .get("url")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            if alpha_id.is_empty() {
-                WEB_BASE.to_string()
-            } else {
-                format!("{WEB_BASE}/abs/{alpha_id}")
-            }
-        });
-
-    let mut commands = Vec::new();
-    let import_strategy;
-    if let Some(base_id) = arxiv_base_id(alpha_id).or_else(|| canonical_id.and_then(arxiv_base_id))
-    {
-        import_strategy = "arxiv";
-        commands.push(format!(
-            "zcli import arxiv {} --dry-run --format json",
-            shell_quote(&base_id)
-        ));
-    } else if let Some(canonical_id) = canonical_id {
-        import_strategy = "pdf";
-        let pdf_path = format!("/tmp/{canonical_id}.pdf");
-        let id_for_pdf = if alpha_id.is_empty() {
-            canonical_id
-        } else {
-            alpha_id
-        };
-        commands.push(format!(
-            "zcli alphaxiv pdf {} --download {} --format json",
-            shell_quote(id_for_pdf),
-            shell_quote(&pdf_path)
-        ));
-        commands.push(format!(
-            "zcli import pdf {} --dry-run --format json",
-            shell_quote(&pdf_path)
-        ));
-        commands.push(format!(
-            "zcli import url {} --dry-run --format json",
-            shell_quote(&url)
-        ));
-    } else {
-        import_strategy = "url";
-        commands.push(format!(
-            "zcli import url {} --dry-run --format json",
-            shell_quote(&url)
-        ));
+    let mut plan = import_plan::alphaxiv_zotero_plan(paper);
+    if let Some(object) = plan.as_object_mut() {
+        object.insert("note_markdown".to_string(), json!(metrics_note(paper)));
     }
-
-    json!({
-        "import_strategy": import_strategy,
-        "dry_run_commands": commands,
-        "note_markdown": metrics_note(paper),
-    })
+    plan
 }
 
 fn attach_zotero_plans(papers: Vec<Value>) -> Vec<Value> {
@@ -1393,24 +1354,25 @@ fn search(args: &SearchArgs) -> Result<Value> {
     }))
 }
 
-fn discover(args: &DiscoverArgs) -> Result<Value> {
-    let client = client(args.timeout);
-    let cutoff = since_cutoff(&args.since, args.days)?;
+fn run_discovery_pipeline(
+    client: &Agent,
+    pipeline: DiscoveryPipeline<'_>,
+) -> Result<(Vec<Value>, Vec<Value>)> {
     let mut errors = Vec::new();
     let search_data = match request_json(
-        &client,
+        client,
         "/v1/search/paper",
-        &[("q", args.query.clone())],
+        &[("q", pipeline.query.to_string())],
         false,
     ) {
         Ok(data) => data,
         Err(error) => {
             errors.push(json!({"endpoint": "full_search", "message": error.to_string()}));
             request_json(
-                &client,
+                client,
                 "/search/v2/paper/fast",
                 &[
-                    ("q", args.query.clone()),
+                    ("q", pipeline.query.to_string()),
                     ("includePrivate", "false".to_string()),
                 ],
                 false,
@@ -1418,15 +1380,15 @@ fn discover(args: &DiscoverArgs) -> Result<Value> {
         }
     };
     let mut papers = papers_from_response(&search_data);
-    if papers.len() < args.limit {
+    if papers.len() < pipeline.limit {
         match request_json(
-            &client,
+            client,
             "/papers/v3/feed",
             &[
                 ("pageNum", "0".to_string()),
                 ("pageSize", "50".to_string()),
-                ("sort", args.fallback_sort.as_str().to_string()),
-                ("interval", args.fallback_interval.clone()),
+                ("sort", pipeline.fallback_sort.as_str().to_string()),
+                ("interval", pipeline.fallback_interval.to_string()),
                 ("topics", "[]".to_string()),
             ],
             false,
@@ -1440,20 +1402,48 @@ fn discover(args: &DiscoverArgs) -> Result<Value> {
     let papers = dedupe_papers(papers);
     let papers = filter_rank_papers(
         papers,
-        &args.topics,
-        args.min_likes,
-        args.min_github_stars,
-        args.min_visits,
-        cutoff,
-        args.date_field,
+        pipeline.topics,
+        pipeline.min_likes,
+        pipeline.min_github_stars,
+        pipeline.min_visits,
+        pipeline.cutoff,
+        pipeline.date_field,
         true,
     );
-    let papers = attach_zotero_plans(papers.into_iter().take(args.limit).collect());
+    let papers = attach_zotero_plans(papers.into_iter().take(pipeline.limit).collect());
+    let papers = if pipeline.triage {
+        add_triage(papers, pipeline.query)
+    } else {
+        papers
+    };
+    Ok((papers, errors))
+}
+
+fn discover(args: &DiscoverArgs) -> Result<Value> {
+    let client = client(args.timeout);
+    let cutoff = since_cutoff(&args.since, args.days)?;
+    let since = cutoff.as_ref().map(DateTime::to_rfc3339);
+    let (papers, errors) = run_discovery_pipeline(
+        &client,
+        DiscoveryPipeline {
+            query: &args.query,
+            limit: args.limit,
+            fallback_sort: args.fallback_sort,
+            fallback_interval: &args.fallback_interval,
+            topics: &args.topics,
+            min_likes: args.min_likes,
+            min_github_stars: args.min_github_stars,
+            min_visits: args.min_visits,
+            cutoff,
+            date_field: args.date_field,
+            triage: false,
+        },
+    )?;
     Ok(json!({
         "source": "alphaxiv",
         "mode": "discover",
         "query": args.query,
-        "since": cutoff.map(|dt| dt.to_rfc3339()),
+        "since": since,
         "date_field": args.date_field.as_str(),
         "count": papers.len(),
         "papers": papers,
@@ -1465,60 +1455,23 @@ fn discover(args: &DiscoverArgs) -> Result<Value> {
 fn brief(args: &BriefArgs) -> Result<Value> {
     let client = client(args.timeout);
     let cutoff = since_cutoff(&args.since, args.days)?;
-    let mut errors = Vec::new();
-    let search_data = match request_json(
+    let since = cutoff.as_ref().map(DateTime::to_rfc3339);
+    let (papers, errors) = run_discovery_pipeline(
         &client,
-        "/v1/search/paper",
-        &[("q", args.query.clone())],
-        false,
-    ) {
-        Ok(data) => data,
-        Err(error) => {
-            errors.push(json!({"endpoint": "full_search", "message": error.to_string()}));
-            request_json(
-                &client,
-                "/search/v2/paper/fast",
-                &[
-                    ("q", args.query.clone()),
-                    ("includePrivate", "false".to_string()),
-                ],
-                false,
-            )?
-        }
-    };
-    let mut papers = papers_from_response(&search_data);
-    if papers.len() < args.limit {
-        match request_json(
-            &client,
-            "/papers/v3/feed",
-            &[
-                ("pageNum", "0".to_string()),
-                ("pageSize", "50".to_string()),
-                ("sort", args.fallback_sort.as_str().to_string()),
-                ("interval", args.fallback_interval.clone()),
-                ("topics", "[]".to_string()),
-            ],
-            false,
-        ) {
-            Ok(data) => papers.extend(papers_from_response(&data)),
-            Err(error) => {
-                errors.push(json!({"endpoint": "fallback_feed", "message": error.to_string()}))
-            }
-        }
-    }
-    let papers = dedupe_papers(papers);
-    let papers = filter_rank_papers(
-        papers,
-        &args.topics,
-        args.min_likes,
-        args.min_github_stars,
-        args.min_visits,
-        cutoff,
-        args.date_field,
-        true,
-    );
-    let papers = attach_zotero_plans(papers.into_iter().take(args.limit).collect());
-    let papers = add_triage(papers, &args.query);
+        DiscoveryPipeline {
+            query: &args.query,
+            limit: args.limit,
+            fallback_sort: args.fallback_sort,
+            fallback_interval: &args.fallback_interval,
+            topics: &args.topics,
+            min_likes: args.min_likes,
+            min_github_stars: args.min_github_stars,
+            min_visits: args.min_visits,
+            cutoff,
+            date_field: args.date_field,
+            triage: true,
+        },
+    )?;
     let read_now = papers
         .iter()
         .filter(|paper| paper.pointer("/triage/lane").and_then(Value::as_str) == Some("read_now"))
@@ -1536,7 +1489,7 @@ fn brief(args: &BriefArgs) -> Result<Value> {
         "mode": "brief",
         "query": args.query,
         "time_window": {
-            "since": cutoff.map(|dt| dt.to_rfc3339()),
+            "since": since,
             "date_field": args.date_field.as_str(),
             "days": args.days,
         },

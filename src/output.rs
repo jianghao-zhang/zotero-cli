@@ -23,25 +23,16 @@ pub fn print_value(value: &Value, format: OutputFormat) -> Result<()> {
 }
 
 fn print_text(value: &Value) {
-    if print_doctor(value) {
-        return;
-    }
-    if print_setup(value) {
-        return;
-    }
-    if print_helper(value) {
-        return;
-    }
-    if print_write(value) {
-        return;
-    }
-    if print_mirror_status(value) {
-        return;
-    }
-    if print_examples(value) {
-        return;
-    }
-    if print_alphaxiv(value) {
+    let renderers: [fn(&Value) -> bool; 7] = [
+        print_doctor,
+        print_setup,
+        print_helper,
+        print_write,
+        print_mirror_status,
+        print_examples,
+        print_alphaxiv,
+    ];
+    if renderers.iter().any(|render| render(value)) {
         return;
     }
     if let Some(message) = value.get("message").and_then(Value::as_str) {

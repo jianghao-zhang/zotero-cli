@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use rusqlite::{params, Connection};
 use serde_json::Value;
+use std::ffi::OsStr;
 use tempfile::TempDir;
 
 struct Fixture {
@@ -56,6 +57,38 @@ impl Fixture {
             .env("ZCLI_STATE_DIR", self._dir.path().join("state"));
         Ok(cmd)
     }
+
+    fn json<I, S>(&self, args: I) -> anyhow::Result<Value>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let output = self
+            .cmd()?
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        Ok(serde_json::from_slice(&output)?)
+    }
+
+    fn text<I, S>(&self, args: I) -> anyhow::Result<String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let output = self
+            .cmd()?
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        Ok(String::from_utf8(output)?)
+    }
 }
 
 #[test]
@@ -100,15 +133,7 @@ fn doctor_and_web_api_config_are_json_first() -> anyhow::Result<()> {
     );
     assert_eq!(value["web_api"]["stored_api_key"], Value::Null);
 
-    let output = fixture
-        .cmd()?
-        .args(["--format", "text", "doctor"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let text = String::from_utf8(output)?;
+    let text = fixture.text(["--format", "text", "doctor"])?;
     assert!(text.contains("zcli doctor"));
     assert!(text.contains("core Zotero access: local read-only"));
     Ok(())
@@ -132,15 +157,7 @@ fn helper_plugin_commands_are_dry_run_first() -> anyhow::Result<()> {
         .is_some_and(|url| url.starts_with("https://")));
     assert!(manifest["applications"]["zotero"]["strict_max_version"].is_string());
 
-    let output = fixture
-        .cmd()?
-        .args(["helper", "doctor"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let value: Value = serde_json::from_slice(&output)?;
+    let value = fixture.json(["helper", "doctor"])?;
     assert_eq!(value["ok"], true);
     assert_eq!(value["optional"], true);
     assert_eq!(value["safety"]["arbitrary_js"], false);
@@ -1188,42 +1205,18 @@ fn setup_can_write_temp_config_and_all_skill_targets_have_dry_run() -> anyhow::R
 #[test]
 fn alphaxiv_command_surface_is_registered() -> anyhow::Result<()> {
     let fixture = Fixture::new()?;
-    let output = fixture
-        .cmd()?
-        .args(["alphaxiv", "--help"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let text = String::from_utf8(output)?;
+    let text = fixture.text(["alphaxiv", "--help"])?;
     assert!(text.contains("zcli alphaxiv"));
     assert!(text.contains("zotero-plan"));
     assert!(text.contains("auth-refresh"));
     assert!(text.contains("discover"));
     assert!(text.contains("brief"));
 
-    let output = fixture
-        .cmd()?
-        .args(["alphaxiv", "search", "--help"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let text = String::from_utf8(output)?;
+    let text = fixture.text(["alphaxiv", "search", "--help"])?;
     assert!(text.contains("--rank-metrics"));
     assert!(text.contains("--with-zotero-plan"));
 
-    let output = fixture
-        .cmd()?
-        .args(["alphaxiv", "brief", "--help"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let text = String::from_utf8(output)?;
+    let text = fixture.text(["alphaxiv", "brief", "--help"])?;
     assert!(text.contains("--date-field"));
     assert!(text.contains("--days"));
     Ok(())
