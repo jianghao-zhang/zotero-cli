@@ -7,7 +7,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 use ureq::Agent;
 
-use crate::import_plan;
+use crate::{config::Config, import_plan};
 
 const API_BASE: &str = "https://api.alphaxiv.org";
 const WEB_BASE: &str = "https://www.alphaxiv.org";
@@ -69,7 +69,7 @@ pub enum DateField {
 }
 
 impl DateField {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::FirstSeen => "first_seen",
             Self::Published => "published",
@@ -222,6 +222,22 @@ struct DiscoveryPipeline<'a> {
     triage: bool,
 }
 
+pub struct DiscoveryOptions<'a> {
+    pub query: &'a str,
+    pub limit: usize,
+    pub fallback_sort: FeedSort,
+    pub fallback_interval: &'a str,
+    pub topics: &'a [String],
+    pub min_likes: Option<i64>,
+    pub min_github_stars: Option<i64>,
+    pub min_visits: Option<i64>,
+    pub since: Option<&'a str>,
+    pub days: Option<i64>,
+    pub date_field: DateField,
+    pub timeout: u64,
+    pub triage: bool,
+}
+
 #[derive(Debug, Args)]
 pub struct PaperArgs {
     pub paper_id: String,
@@ -281,11 +297,22 @@ pub struct ZoteroPlanArgs {
     pub timeout: u64,
 }
 
-pub fn dispatch(command: &AlphaXivCommands) -> Result<Value> {
+pub fn dispatch(command: &AlphaXivCommands, config: &Config) -> Result<Value> {
     match command {
-        AlphaXivCommands::AuthStatus(args) => auth_status(args),
-        AlphaXivCommands::AuthRefresh(args) => auth_refresh(args),
-        AlphaXivCommands::Feed(args) => feed(args),
+        AlphaXivCommands::AuthStatus(args) => {
+            ensure_alphaxiv_auth_allowed(config)?;
+            auth_status(args)
+        }
+        AlphaXivCommands::AuthRefresh(args) => {
+            ensure_alphaxiv_auth_allowed(config)?;
+            auth_refresh(args)
+        }
+        AlphaXivCommands::Feed(args) => {
+            if matches!(args.sort, FeedSort::Recommended) {
+                ensure_alphaxiv_auth_allowed(config)?;
+            }
+            feed(args)
+        }
         AlphaXivCommands::Search(args) => search(args),
         AlphaXivCommands::Discover(args) => discover(args),
         AlphaXivCommands::Brief(args) => brief(args),
@@ -295,6 +322,15 @@ pub fn dispatch(command: &AlphaXivCommands) -> Result<Value> {
         AlphaXivCommands::Pdf(args) => pdf(args),
         AlphaXivCommands::ZoteroPlan(args) => zotero_plan(args),
     }
+}
+
+fn ensure_alphaxiv_auth_allowed(config: &Config) -> Result<()> {
+    if config.risk.high_risk_auth_enabled && config.risk.alphaxiv_auth_enabled {
+        return Ok(());
+    }
+    bail!(
+        "alphaXiv authenticated features are disabled by default; enable high-risk auth in `zcli setup` advanced settings before using cookie/token-backed alphaXiv Recommended/auth commands"
+    )
 }
 
 fn client(timeout: u64) -> Agent {
@@ -1420,58 +1456,51 @@ fn run_discovery_pipeline(
 }
 
 fn discover(args: &DiscoverArgs) -> Result<Value> {
-    let client = client(args.timeout);
-    let cutoff = since_cutoff(&args.since, args.days)?;
-    let since = cutoff.as_ref().map(DateTime::to_rfc3339);
-    let (papers, errors) = run_discovery_pipeline(
-        &client,
-        DiscoveryPipeline {
-            query: &args.query,
-            limit: args.limit,
-            fallback_sort: args.fallback_sort,
-            fallback_interval: &args.fallback_interval,
-            topics: &args.topics,
-            min_likes: args.min_likes,
-            min_github_stars: args.min_github_stars,
-            min_visits: args.min_visits,
-            cutoff,
-            date_field: args.date_field,
-            triage: false,
-        },
-    )?;
+    let value = discover_with_options(DiscoveryOptions {
+        query: &args.query,
+        limit: args.limit,
+        fallback_sort: args.fallback_sort,
+        fallback_interval: &args.fallback_interval,
+        topics: &args.topics,
+        min_likes: args.min_likes,
+        min_github_stars: args.min_github_stars,
+        min_visits: args.min_visits,
+        since: args.since.as_deref(),
+        days: args.days,
+        date_field: args.date_field,
+        timeout: args.timeout,
+        triage: false,
+    })?;
     Ok(json!({
         "source": "alphaxiv",
         "mode": "discover",
         "query": args.query,
-        "since": since,
+        "since": value["since"].clone(),
         "date_field": args.date_field.as_str(),
-        "count": papers.len(),
-        "papers": papers,
-        "errors": errors,
+        "count": value["papers"].as_array().map(Vec::len).unwrap_or(0),
+        "papers": value["papers"].clone(),
+        "errors": value["errors"].clone(),
         "selection_hint": "Ranked by alphaXiv metrics after query/topic filters; Zotero commands are dry-run only.",
     }))
 }
 
 fn brief(args: &BriefArgs) -> Result<Value> {
-    let client = client(args.timeout);
-    let cutoff = since_cutoff(&args.since, args.days)?;
-    let since = cutoff.as_ref().map(DateTime::to_rfc3339);
-    let (papers, errors) = run_discovery_pipeline(
-        &client,
-        DiscoveryPipeline {
-            query: &args.query,
-            limit: args.limit,
-            fallback_sort: args.fallback_sort,
-            fallback_interval: &args.fallback_interval,
-            topics: &args.topics,
-            min_likes: args.min_likes,
-            min_github_stars: args.min_github_stars,
-            min_visits: args.min_visits,
-            cutoff,
-            date_field: args.date_field,
-            triage: true,
-        },
-    )?;
+    let value = discover_with_options(DiscoveryOptions {
+        query: &args.query,
+        limit: args.limit,
+        fallback_sort: args.fallback_sort,
+        fallback_interval: &args.fallback_interval,
+        topics: &args.topics,
+        min_likes: args.min_likes,
+        min_github_stars: args.min_github_stars,
+        min_visits: args.min_visits,
+        since: args.since.as_deref(),
+        days: args.days,
+        date_field: args.date_field,
+        timeout: args.timeout,
+        triage: true,
+    })?;
+    let papers = value["papers"].as_array().cloned().unwrap_or_default();
     let read_now = papers
         .iter()
         .filter(|paper| paper.pointer("/triage/lane").and_then(Value::as_str) == Some("read_now"))
@@ -1489,7 +1518,7 @@ fn brief(args: &BriefArgs) -> Result<Value> {
         "mode": "brief",
         "query": args.query,
         "time_window": {
-            "since": since,
+            "since": value["since"].clone(),
             "date_field": args.date_field.as_str(),
             "days": args.days,
         },
@@ -1500,8 +1529,40 @@ fn brief(args: &BriefArgs) -> Result<Value> {
         },
         "count": papers.len(),
         "papers": papers,
-        "errors": errors,
+        "errors": value["errors"].clone(),
         "selection_hint": "Triage is deterministic: query-term overlap, alphaXiv metrics, GitHub stars, visits, and the selected time field. All Zotero actions are dry-run commands.",
+    }))
+}
+
+pub fn discover_with_options(options: DiscoveryOptions<'_>) -> Result<Value> {
+    let client = client(options.timeout);
+    let since = options.since.map(ToOwned::to_owned);
+    let cutoff = since_cutoff(&since, options.days)?;
+    let since = cutoff.as_ref().map(DateTime::to_rfc3339);
+    let (papers, errors) = run_discovery_pipeline(
+        &client,
+        DiscoveryPipeline {
+            query: options.query,
+            limit: options.limit,
+            fallback_sort: options.fallback_sort,
+            fallback_interval: options.fallback_interval,
+            topics: options.topics,
+            min_likes: options.min_likes,
+            min_github_stars: options.min_github_stars,
+            min_visits: options.min_visits,
+            cutoff,
+            date_field: options.date_field,
+            triage: options.triage,
+        },
+    )?;
+    Ok(json!({
+        "source": "alphaxiv",
+        "query": options.query,
+        "since": since,
+        "date_field": options.date_field.as_str(),
+        "count": papers.len(),
+        "papers": papers,
+        "errors": errors,
     }))
 }
 

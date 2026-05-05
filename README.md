@@ -22,6 +22,8 @@ Optional ecosystem links:
 - [Setup](#setup)
 - [Feature Map](#feature-map)
 - [Common Workflows](#common-workflows)
+- [Paper Discovery](#paper-discovery)
+- [Inbox](#inbox)
 - [Recaps](#recaps)
 - [Optional llm-for-zotero Support](#optional-llm-for-zotero-support)
 - [Markdown](#markdown)
@@ -78,6 +80,21 @@ cargo run -- doctor --format pretty
 
 `zcli setup` is the interactive setup wizard. It writes local config only; it does not contact Zotero Web API, import papers, or mutate your Zotero library.
 
+Interactive setup starts with a human-readable config overview and a section menu. Press Enter for the full setup path, or choose only the area you want to edit:
+
+| Section | What it configures |
+| --- | --- |
+| `1 local Zotero` | Zotero database and storage paths. |
+| `2 inbox sources` | Curated X paper accounts for `zcli inbox fetch --source x`; low risk, stores public handles only. |
+| `3 mirror` | Optional filesystem mirror root. |
+| `4 Web API` | Optional Zotero Web API identity and API key source. |
+| `5 llm-for-zotero` | Optional lfz recap/runtime integration. |
+| `6 agent skills` | Optional Codex/Claude/Hermes/lfz/OpenClaw skill install targets. |
+| `7 advanced/high-risk auth` | Cookie/token-backed features such as alphaXiv Recommended/auth commands. Default off for new users. |
+| `s save` | Save the current config and exit. |
+
+Risk levels are explicit. Low-risk features use local paths, public handles, public paper APIs, or dry-run-only previews. High-risk features can read login cookies, bearer tokens, browser session state, or authenticated write helpers, and stay disabled unless the user opts in on that machine.
+
 It can configure:
 
 | Area | Purpose | Required |
@@ -96,7 +113,7 @@ zcli setup
 zcli setup --dry-run
 zcli setup --defaults
 zcli config init
-zcli config status --format pretty
+zcli config status --format text
 ```
 
 Default config paths:
@@ -133,6 +150,7 @@ Output defaults to `auto`:
 | Resolve and paper surface | `resolve`, `find paper`, `paper`, `context` | Finds an item from natural inputs such as title, short title, citation key, DOI, arXiv, URL, or file path; returns a compact paper view or builds an agent context pack. |
 | Search | `search list`, `search grep`, `search context` | Searches metadata/full text and returns matching context. |
 | Local paper index | `index status`, `index update`, `index search`, `index chunks`, `index chunk`, `index get` | Builds a local SQLite FTS5/BM25 sidecar index for repeated fast paper and passage search. No network or model is required. |
+| Paper discovery | `alphaxiv feed`, `alphaxiv search`, `alphaxiv discover`, `alphaxiv brief`, `alphaxiv paper`, `alphaxiv markdown`, `alphaxiv pdf`, `alphaxiv zotero-plan` | Uses alphaXiv as a public paper discovery/metrics source, with time-window filtering, research triage, and dry-run Zotero import plans. |
 | Item reads | `item get`, `item extract`, `item annotations`, `item notes`, `item attachments`, `item bibtex`, `item markdown` | Reads Zotero item metadata, extracted text, annotations, notes, attachments, BibTeX, and paper Markdown. |
 | Markdown status | `markdown status` | Shows whether Markdown will come from lfz MinerU cache or local fallback. |
 | Library browsing | `collection list`, `collection items`, `tags list`, `tags items`, `recent` | Lists collections, tags, tagged items, collection items, and recently touched papers. |
@@ -146,7 +164,7 @@ Output defaults to `auto`:
 | Agent export | `export pack` | Builds a paper pack for [Codex](https://github.com/openai/codex), [Claude Code](https://code.claude.com/docs), [Hermes Agent](https://github.com/nousresearch/hermes-agent), or [OpenClaw](https://github.com/openclaw/openclaw) style workflows. |
 | Agent skill | `skill doctor`, `skill install` | Installs the optional `zotero-cli` skill into supported agent skill roots. |
 | Helper plugin | `helper doctor`, `helper package`, `helper install` | Packages and installs the optional Zotero runtime helper for writes. |
-| Inbox | `inbox status`, `inbox fetch --dry-run` | Reserved external paper intake entry point. Mutation/import remains explicit and dry-run-first. |
+| Inbox | `inbox status`, `inbox fetch [QUERY] --source alphaxiv\|huggingface\|x --dry-run`, `inbox sources x add/list/remove` | Unified external paper intake entry point. It returns `paper_candidate/v1` records with source time fields, triage, metrics/social signals, and dry-run Zotero import plans. |
 
 ## Common Workflows
 
@@ -195,7 +213,60 @@ zcli import pdf ./paper.pdf --dry-run
 zcli import url https://arxiv.org/abs/2604.06240 --dry-run
 ```
 
-`import arxiv` and `import ids` use Zotero's Add Item by Identifier translator path. For arXiv, the helper falls back to arXiv Atom metadata plus PDF attachment if Zotero returns no item. `import pdf` copies a local or remote PDF through Zotero and asks Zotero to recognize metadata unless `--no-recognize` is set. `import url` first detects identifier-style URLs, then PDF URLs, then falls back to Zotero web translators or a webpage item.
+`import arxiv`, `import ids`, `import pdf`, and `import url` share one import-plan layer. Dry-run output is the canonical preview: normalized source, duplicate check, helper payload, and the execution command. `import arxiv` and `import ids` use Zotero's Add Item by Identifier translator path. For arXiv, the helper falls back to arXiv Atom metadata plus PDF attachment if Zotero returns no item. `import pdf` copies a local or remote PDF through Zotero and asks Zotero to recognize metadata unless `--no-recognize` is set. `import url` first detects identifier-style URLs, then PDF URLs, then falls back to Zotero web translators or a webpage item.
+
+## Paper Discovery
+
+`zcli alphaxiv` is the current discovery-source adapter. It is Rust-native for normal feed/search/metadata/PDF work and does not require browser automation for public alphaXiv surfaces.
+
+Useful entry points:
+
+```bash
+zcli alphaxiv feed --sort hot --days 7 --date-field first-seen --rank-metrics --limit 30
+zcli alphaxiv search "agentic harness" --since 2026-04-28 --date-field published --rank-metrics
+zcli alphaxiv discover "coding agent harness memory" --days 30 --date-field any --limit 10
+zcli alphaxiv brief "coding agent harness memory" --days 30 --date-field any --limit 8 --format text
+zcli alphaxiv zotero-plan 2604.25850 --format json
+```
+
+Time filtering is explicit:
+
+| Field | Use when |
+| --- | --- |
+| `first-seen` | You want papers newly appearing on alphaXiv. |
+| `published` | You want papers by publication date. |
+| `updated` | You want recently changed entries. |
+| `any` | You want recent activity across first-seen, published, or updated. |
+
+`alphaxiv brief` is the agent-facing triage command. It combines alphaXiv search with a feed fallback, deduplicates, ranks by alphaXiv metrics, assigns `read_now` / `skim` / `watch` lanes, explains relevance, and attaches dry-run Zotero import commands. It does not mutate Zotero.
+
+## Inbox
+
+`zcli inbox` is the cross-source paper intake surface. Current adapters cover alphaXiv, Hugging Face Papers, and X via the local Bird CLI. The output is source-neutral so later arXiv, OpenAlex, Semantic Scholar, RSS, conference, and code-signal adapters can attach without changing downstream agent workflows.
+
+```bash
+zcli inbox status --format json
+zcli inbox fetch "coding agent harness memory" --source alphaxiv --days 30 --date-field any --limit 10 --dry-run --format json
+zcli inbox fetch --source huggingface --days 3 --date-field any --limit 20 --dry-run --format json
+zcli inbox fetch "coding agent" --source huggingface --days 30 --date-field any --limit 10 --dry-run --format json
+zcli inbox triage "coding agent" --source huggingface --days 30 --code-overview --dry-run --format json
+zcli inbox discussion "Squeez: Task-Conditioned Tool-Output Pruning for Coding Agents" --handle paper_author --days 30 --format json
+zcli inbox discussion 2604.04979 --tweet https://x.com/author/status/123 --reply-limit 80 --format json
+zcli inbox sources x add paperreadingclub --format json
+zcli inbox sources x list --format json
+zcli inbox fetch "agent paper arxiv" --source x --days 1 --limit 10 --dry-run --format json
+zcli inbox fetch "agent paper arxiv" --source x --handle paperreadingclub --days 1 --limit 10 --dry-run --format json
+zcli inbox sources x remove paperreadingclub --format json
+```
+
+`inbox fetch` currently performs a read-only candidate preview. It calls the selected source adapter, normalizes results into `paper_candidate/v1`, and preserves the raw source record for debugging. Each candidate includes source identifiers, URLs, explicit time fields plus per-source time semantics, metrics/resources/social signals, triage lane/reasons, local context match, workflow commands, and a dry-run Zotero plan when an arXiv ID can be inferred. `inbox triage` is an alias for the same candidate pipeline with the workflow-oriented output. `--execute` is intentionally rejected at this layer; imports and Zotero writes must go through the returned dry-run commands.
+
+Hugging Face uses the public daily papers and paper-search endpoints. With an empty query it returns daily/trending papers over the requested window; with a query it searches Hugging Face Papers and supplements from daily papers when needed. X uses `bird --quote-depth 0`; `zcli inbox sources x add HANDLE` stores curated paper accounts in the normal zcli config, `--source x` reads that list by default, and temporary `--handle` values override the configured list for one fetch. Without configured handles or explicit handles, `--source x` uses Bird search.
+
+By default, inbox candidates are lightly re-ranked against local Zotero recent papers and the reading queue. Use `--no-context` to skip that. Use `--code-overview` to attach a quick GitHub API overview for linked repositories: stars, forks, open issues, language, default branch, last push, and archived status. It does not clone repositories or run deep code analysis.
+
+`inbox discussion` is the X community follow-up path for a known paper. Give it a title, arXiv ID, alphaXiv/Hugging Face paper URL, or known X post URL via `--tweet`. It searches likely announcement posts, prioritizes author/curator handles passed with `--handle`, expands replies and thread context with Bird, then returns `paper_discussion/v1`: announcement posts, high-value questions, possible author answers, limitation notes, benchmark/comparison comments, and code/data/reproduction discussion. It is read-only and bounded by `--limit`, `--reply-limit`, and `--max-pages`; quote repost coverage is best-effort through X search.
+The output includes the generated X search queries so empty or sparse results are easy to debug without rerunning in verbose mode.
 
 Read item data:
 
@@ -426,11 +497,15 @@ The helper does not expose arbitrary JavaScript and does not write SQLite direct
 
 The helper is deliberately small and fast: startup ensures one token file and registers one local endpoint; the token is cached in memory after startup; execute calls use compact responses; file existence checks happen only for attachment/file operations; batch operation support allows future CLI flows to submit multiple whitelisted writes in one localhost round trip.
 
+Internally, imports and writes share the same dry-run-first mutation executor. The public consequence is simple: preview shape and safety semantics should stay consistent across `zcli import ... --dry-run` and `zcli write ... --dry-run`.
+
 ## Agent Skill
 
 The skill is optional. It teaches agents to call `zcli` directly and not depend on MCP or an adapter API.
 
 There are two skill surfaces: `skills/zotero-cli/SKILL.md` is the portable external-agent skill for Codex, Claude Code, Hermes Agent, and OpenClaw; `skills/zotero-cli-lfz/SKILL.md` is the specialized [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime skill that frames `zcli` as Zotero-native paper/library access.
+
+`skills/alphaxiv/SKILL.md` is a separate discovery skill. It should hand paper candidates back into `zcli import ... --dry-run` or `zcli alphaxiv zotero-plan`; it should not create a second Zotero mutation path.
 
 The `lfz` target is special: it uses `skills/zotero-cli-lfz/SKILL.md` and installs into detected [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime roots. Different Zotero profiles can have different runtime folders, so dry-run output may list multiple `target_paths`.
 
@@ -464,7 +539,8 @@ The current local CLI path is usable, but these pieces still need work before tr
 | --- | --- |
 | Web API smoke and remote mode | Add `zcli web-api doctor` or `zcli web-api ping` to validate auth, library ID, permissions, and read access against Zotero's official API. Current Web API support is configuration-only. |
 | Semantic index layer | Extend the new local index with optional GGUF embeddings, local reranking, warm daemon mode, and cached query expansion. The current shipped layer is model-free SQLite FTS5/BM25. |
-| Inbox/import pipeline | Implement `zcli inbox fetch` as the external "papers to read" entry point with source adapters, duplicate detection, dry-run previews, and explicit execution for imports. |
+| Inbox/import pipeline | `zcli inbox fetch` now returns alphaXiv, Hugging Face, and X/Bird backed `paper_candidate/v1` previews. Next work is local Zotero duplicate scoring, queue/collection/tag handoff, and explicit import execution through the existing dry-run mutation layer. |
+| Discovery source adapters | Add arXiv/OpenAlex/Semantic Scholar/RSS/conference feeds behind the same candidate -> import-plan shape. |
 | Mirror watch hardening | Run long-duration `zcli mirror watch` tests, validate CPU/I/O over hours or days, and polish launchd/daemon installation. Current actual write testing covered small rebuilds; full-library sync has been dry-run tested. |
 | Helper execute coverage | Expand real helper tests beyond tag add/remove to notes, collections, file import/link, attachment rename, batch operations, and trash safety. |
 | Cross-environment installs | Test npm package and helper XPI on fresh Zotero 7/8/9 profiles, macOS Intel/ARM, and Linux; verify fallback Cargo builds when no prebuilt native binary is present. |

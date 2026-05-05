@@ -19,6 +19,10 @@ pub struct Config {
     pub helper: HelperConfig,
     #[serde(default)]
     pub lfz: LfzConfig,
+    #[serde(default)]
+    pub inbox: InboxConfig,
+    #[serde(default)]
+    pub risk: RiskConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +71,20 @@ pub struct LfzConfig {
     pub zotero_data_dir: Option<PathBuf>,
     pub claude_runtime_dir: Option<PathBuf>,
     pub adapter_trace_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InboxConfig {
+    #[serde(default)]
+    pub x_handles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RiskConfig {
+    #[serde(default)]
+    pub high_risk_auth_enabled: bool,
+    #[serde(default)]
+    pub alphaxiv_auth_enabled: bool,
 }
 
 impl Config {

@@ -1,6 +1,6 @@
 ---
 name: zotero-cli
-description: Use whenever the user asks Codex to use Zotero, zcli, zotero-cli, or the local Zotero library; find, search, read, summarize, compare, cite, or inspect papers; locate papers by topic, title, short title, citation key, DOI, arXiv, URL, alphaXiv URL, or filename; import arXiv/DOI/PDF/URL papers; connect paper discovery sources such as alphaXiv into Zotero import or inbox workflows; search paper passages or page-level evidence; read notes, annotations, collections, tags, recent reading, reading recaps, or llm-for-zotero conversations; or perform dry-run-first Zotero writes through zcli.
+description: Use whenever the user asks Codex to use Zotero, zcli, zotero-cli, or the local Zotero library; find, search, read, summarize, compare, cite, or inspect papers; locate papers by topic, title, short title, citation key, DOI, arXiv, URL, alphaXiv URL, or filename; import arXiv/DOI/PDF/URL papers; turn discovery sources such as alphaXiv into Zotero dry-run import plans; search paper passages or page-level evidence; read notes, annotations, collections, tags, recent reading, reading recaps, or llm-for-zotero conversations; or perform dry-run-first Zotero writes through zcli.
 ---
 
 # Zotero CLI
@@ -15,9 +15,9 @@ Use this skill when working with a user's Zotero library through `zcli` from Cod
 - For Zotero writes or imports, use `zcli write ... --dry-run` or `zcli import ... --dry-run` first. Use `--execute` only when the user explicitly asked to perform the change in the current turn. Never call the helper plugin endpoint directly.
 - Use `zcli helper doctor --format json` to check the optional Zotero helper plugin before executing local Zotero-runtime writes.
 - Treat helper execute results as compact by default. Fetch normal item details with `zcli item get ITEMKEY --format json` when more metadata is needed after a write.
-- For paper imports, prefer `zcli import arxiv ...` for arXiv IDs, `zcli import ids ...` for DOI/ISBN/PMID/ADS identifiers, `zcli import pdf ...` for local or remote PDFs, and `zcli import url ...` for mixed paper URLs. Dry-run output is the duplicate/import plan; execute output should be followed by `zcli item get KEY --format json` for any item the answer depends on.
+- For paper imports, prefer `zcli import arxiv ...` for arXiv IDs, `zcli import ids ...` for DOI/ISBN/PMID/ADS identifiers, `zcli import pdf ...` for local or remote PDFs, and `zcli import url ...` for mixed paper URLs. Dry-run output is the canonical import plan: normalized source, duplicate check, helper payload, and execute command. Execute output should be followed by `zcli item get KEY --format json` for any item the answer depends on.
 - arXiv imports use Zotero's native translator first. If Zotero returns no item, the helper can fall back to arXiv Atom metadata and attach the PDF, still through Zotero runtime APIs.
-- For alphaXiv discovery/import requests, use the `alphaxiv` skill or `zcli alphaxiv ... --format json` first to normalize title, alphaXiv ID, canonical ID, metrics, PDF URL, overview URL, and time fields. Prefer `zcli alphaxiv brief QUERY --days N --date-field any --format json` when the user wants recent paper triage before import: it adds read-now/skim/watch lanes, relevance reasons, next reading commands, and Zotero dry-run import plans. For arXiv-like alphaXiv IDs, dry-run `zcli import arxiv BASE_ID --format json`; for alphaXiv-only IDs, dry-run `zcli import pdf DOWNLOADED_PDF --format json` or `zcli import url https://www.alphaxiv.org/abs/ID --format json`. Add alphaXiv metrics notes only with `zcli write note ITEMKEY --content ... --dry-run --format json` unless the user explicitly approves execution.
+- For alphaXiv discovery/import requests, use the `alphaxiv` skill or `zcli alphaxiv ... --format json` first to normalize title, alphaXiv ID, canonical ID, metrics, PDF URL, overview URL, and time fields. Prefer `zcli alphaxiv brief QUERY --days N --date-field any --format json` when the user wants recent paper triage before import: it adds read-now/skim/watch lanes, relevance reasons, next reading commands, and Zotero dry-run import plans. Use `--since YYYY-MM-DD` for reproducible batches. Add alphaXiv metrics notes only with `zcli write note ITEMKEY --content ... --dry-run --format json` unless the user explicitly approves execution.
 - Do not assume `llm-for-zotero` exists. Use `zcli lfz doctor` before `zcli recap lfz`.
 - When the user gives a title, short title, citation key, DOI, arXiv ID, URL, or file path instead of a Zotero key, call `zcli resolve QUERY --format json` first.
 - When the user gives a topic-like or fuzzy paper request, call `zcli find paper QUERY --format json` and then use `item.key` from the best hit.
@@ -77,6 +77,16 @@ zcli write import-files ./paper.pdf --dry-run --format json
 zcli helper doctor --format json
 zcli skill doctor --format json
 zcli inbox status --format json
+zcli inbox fetch "coding agent harness memory" --source alphaxiv --days 30 --date-field any --limit 10 --dry-run --format json
+zcli inbox fetch --source huggingface --days 3 --date-field any --limit 20 --dry-run --format json
+zcli inbox fetch "coding agent" --source huggingface --days 30 --date-field any --limit 10 --dry-run --format json
+zcli inbox triage "coding agent" --source huggingface --days 30 --code-overview --dry-run --format json
+zcli inbox discussion "Squeez: Task-Conditioned Tool-Output Pruning for Coding Agents" --handle paper_author --days 30 --format json
+zcli inbox discussion 2604.04979 --tweet https://x.com/author/status/123 --reply-limit 80 --format json
+zcli inbox sources x add paperreadingclub --format json
+zcli inbox sources x list --format json
+zcli inbox fetch "agent paper arxiv" --source x --days 1 --limit 10 --dry-run --format json
+zcli inbox fetch "agent paper arxiv" --source x --handle paperreadingclub --days 1 --limit 10 --dry-run --format json
 zcli alphaxiv feed --sort hot --interval "All time" --limit 100 --format json
 zcli alphaxiv search "agentic harness" --limit 20 --format json
 zcli alphaxiv discover "coding agent harness memory" --days 30 --date-field any --limit 10 --format json
@@ -93,3 +103,7 @@ For import results, preserve `status`, `source`, and the returned Zotero `key`. 
 For recap provenance, preserve the exact `provenance` value. `metadata_modified` is only a fallback touched-paper signal, not definite reading.
 
 For llm-for-zotero recaps, read `paper_groups` first for the topic map. Follow `message_ref` / `turn_command` instead of asking for large `--full-text` output when only one turn is needed.
+
+For new external paper intake, prefer `zcli inbox fetch [QUERY] --source alphaxiv|huggingface|x --days N --date-field any --dry-run --format json` when the user wants a cross-source "papers to read" surface. Use `--source huggingface` without a query for Hugging Face daily/trending papers, with a query for HF paper search, and `zcli inbox sources x add HANDLE` plus `--source x` for curated X paper accounts through Bird. Temporary `--handle HANDLE` values override the configured X account list for one fetch. Treat returned `paper_candidate/v1` records as the handoff object: inspect `triage`, `context_match`, `workflow`, `signals`, `time`, and `zotero_plan`, then run a returned Zotero dry-run command only if importing is actually needed. Use `inbox triage ... --code-overview` when the user wants a quick GitHub repo signal overview; it is API metadata only, not a deep repo review.
+
+For "what did the author/community say about this paper on X" requests, use `zcli inbox discussion PAPER --format json`. Pass `--handle AUTHOR_OR_CURATOR` when the user knows the original author or a paper account, and `--tweet URL` when they already have the announcement post. Read `announcement_posts` first, then `discussion_items`; prioritize items labeled `question`, `possible_author_answer`, `limitation_or_failure`, `benchmark_or_comparison`, and `implementation_or_data`. Treat quote coverage as best-effort unless the command found explicit quote/search matches.

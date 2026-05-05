@@ -1,6 +1,6 @@
 ---
 name: alphaxiv
-description: Use alphaXiv as a public paper discovery and metrics source without browser, web-access, or CDP. Trigger for alphaXiv Hot/Likes/Views/GitHub/Twitter(X) feeds, alphaXiv search, paper metrics, markdown/PDF/overview retrieval, and Zotero/zcli import planning from alphaXiv IDs, arXiv IDs, or alphaXiv URLs.
+description: Use alphaXiv as a public paper discovery and metrics source without browser, web-access, or CDP. Trigger for alphaXiv Hot/Likes/Views/GitHub/Twitter(X) feeds, alphaXiv search, recent paper triage by time window, paper metrics, markdown/PDF/overview retrieval, and Zotero/zcli dry-run import planning from alphaXiv IDs, arXiv IDs, or alphaXiv URLs.
 ---
 
 # alphaXiv
@@ -16,7 +16,7 @@ Use this skill when alphaXiv is the discovery or metrics source for papers. alph
 
 ## Helper
 
-Prefer the Rust-native `zcli alphaxiv` commands for repeatable work:
+Prefer the Rust-native `zcli alphaxiv` commands for repeatable work. Use `brief` for broad research triage, `discover` for JSON candidate pipelines, `search` for query-only lookup, and `feed` for alphaXiv ranking pages:
 
 ```bash
 zcli alphaxiv feed --sort hot --interval "All time" --limit 100 --format json
@@ -26,7 +26,7 @@ zcli alphaxiv feed --sort hot --days 7 --date-field first-seen --rank-metrics --
 zcli alphaxiv auth-refresh --format json
 zcli alphaxiv auth-status --format json
 zcli alphaxiv feed --sort recommended --interval "7 Days" --limit 30 --format json
-zcli alphaxiv search "agentic harness" --limit 20 --format json
+zcli alphaxiv search "agentic harness" --since 2026-04-28 --date-field published --rank-metrics --limit 20 --format json
 zcli alphaxiv search "agentic harness" --topic agents --rank-metrics --with-zotero-plan --limit 10 --format json
 zcli alphaxiv discover "coding agent harness memory" --days 30 --date-field any --min-likes 1 --limit 10 --format json
 zcli alphaxiv brief "coding agent harness memory" --days 30 --date-field any --limit 8 --format text
@@ -39,7 +39,11 @@ zcli alphaxiv pdf visual-primitives --download /tmp/visual-primitives.pdf --form
 zcli alphaxiv zotero-plan 2604.25850 --format json
 ```
 
-The Rust path returns normalized JSON for feeds, search, discovery, paper metadata, PDF downloads, and zcli import plans. It accepts bare alphaXiv IDs, alphaXiv URLs, arXiv abs/PDF URLs, and alphaXiv fetcher PDF URLs. Use `discover` when the user gives a broad intent such as "find promising papers about coding-agent memory": it combines search with a feed fallback, ranks by alphaXiv metrics, and attaches dry-run Zotero import plans. Use `brief` when the user wants an agent-readable research triage: it adds read-now/skim/watch lanes, relevance reasons, metric evidence, time-window evidence, next reading commands, and Zotero dry-run commands. For recency-sensitive requests, always set a time window with `--days N` or `--since YYYY-MM-DD`; choose `--date-field first-seen` for newly appeared alphaXiv papers, `--date-field published` for paper publication date, `--date-field updated` for recently changed entries, and `--date-field any` when the user asks broadly for recent activity. The older Python helper at `~/.agents/skills/alphaxiv/scripts/alphaxiv.py` remains a readable fallback while the Rust path is the preferred agent interface.
+The Rust path returns normalized JSON for feeds, search, discovery, paper metadata, PDF downloads, and zcli import plans. It accepts bare alphaXiv IDs, alphaXiv URLs, arXiv abs/PDF URLs, and alphaXiv fetcher PDF URLs. `discover` and `brief` share one discovery pipeline: full search first, fast search fallback, feed fallback when too few papers are found, dedupe, time filtering, metric ranking, then Zotero dry-run import plans. Use `brief` when the user wants an agent-readable research triage: it adds read-now/skim/watch lanes, relevance reasons, metric evidence, time-window evidence, next reading commands, and Zotero dry-run commands. For recency-sensitive requests, always set a time window with `--days N` or `--since YYYY-MM-DD`; choose `--date-field first-seen` for newly appeared alphaXiv papers, `--date-field published` for paper publication date, `--date-field updated` for recently changed entries, and `--date-field any` when the user asks broadly for recent activity. Prefer `--since` for reproducible research batches. The older Python helper at `~/.agents/skills/alphaxiv/scripts/alphaxiv.py` remains a readable fallback while the Rust path is the preferred agent interface.
+
+When the user wants a broader "papers to read" intake surface rather than alphaXiv-specific output, route through `zcli inbox fetch [QUERY] --source alphaxiv|huggingface|x --days N --date-field any --dry-run --format json`. It wraps source-specific discovery into `paper_candidate/v1` records; alphaXiv remains the strongest alphaXiv-specific adapter, while Hugging Face and X/Bird cover daily HF papers, HF search, and curated X paper accounts. Inbox candidates add local Zotero/queue context matching, source-specific time semantics, workflow commands, and optional quick GitHub code overview via `--code-overview`.
+
+When the user wants X discussion around one known alphaXiv/arXiv paper, route through `zcli inbox discussion PAPER --format json` rather than alphaXiv comments alone. Pass the paper title, arXiv ID, or alphaXiv URL; add `--handle AUTHOR_OR_CURATOR` or `--tweet URL` when known. The output separates announcement posts from high-value questions, possible author answers, limitations, benchmark/comparison notes, and code/data/reproduction discussion.
 
 For Recommended feed, prefer the local Clerk cookie file:
 
@@ -195,7 +199,7 @@ Metrics field mapping:
 
 ## Zotero CLI Workflow
 
-For arXiv-like alphaXiv IDs matching `^\d{4}\.\d{4,5}(v\d+)?$`, strip the version for arXiv import:
+`zcli alphaxiv zotero-plan ID --format json` delegates to zcli's shared import-plan logic. For arXiv-like alphaXiv IDs matching `^\d{4}\.\d{4,5}(v\d+)?$`, it strips the version for arXiv import:
 
 ```bash
 zcli import arxiv 2604.25850 --dry-run --format json

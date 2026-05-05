@@ -67,15 +67,94 @@ impl<'a> SetupWizard<'a> {
         write_title("zcli setup")?;
         write_line("This writes local zcli config only. It does not contact Zotero Web API, import papers, or mutate your Zotero library.")?;
         self.prompt_existing_config()?;
-        write_line("Press Enter to accept a detected/default value.")?;
+        write_line("Press Enter to accept a detected/default value. In the menu, press Enter for the full setup path.")?;
 
+        loop {
+            self.write_overview()?;
+            write_section("Setup menu")?;
+            write_line("Enter: full setup. Or choose one section: 1 local Zotero, 2 inbox sources, 3 mirror, 4 Web API, 5 llm-for-zotero, 6 agent skills, 7 advanced/high-risk auth, s save.")?;
+            let choice = prompt_string("Choose section", Some("all"))?;
+            match choice.trim().to_ascii_lowercase().as_str() {
+                "" | "all" | "a" => {
+                    self.prompt_core_sections()?;
+                    break;
+                }
+                "1" | "local" | "zotero" | "library" => self.prompt_zotero_paths()?,
+                "2" | "inbox" | "sources" | "x" => self.prompt_inbox_sources()?,
+                "3" | "mirror" => self.prompt_mirror()?,
+                "4" | "web" | "web-api" | "api" => self.prompt_web_api()?,
+                "5" | "lfz" | "llm" | "llm-for-zotero" => self.prompt_lfz()?,
+                "6" | "skills" | "skill" => {
+                    if self.args.no_skills {
+                        write_line("Skill prompts are disabled by --no-skills.")?;
+                    } else {
+                        self.prompt_skills()?;
+                    }
+                }
+                "7" | "advanced" | "risk" | "risky" | "auth" => self.prompt_risk()?,
+                "s" | "save" | "done" | "q" | "quit" => break,
+                _ => write_line("Unknown section. Use Enter/all, 1-7, or s to save.")?,
+            }
+        }
+        Ok(())
+    }
+
+    fn prompt_core_sections(&mut self) -> Result<()> {
         self.prompt_zotero_paths()?;
+        self.prompt_inbox_sources()?;
         self.prompt_mirror()?;
         self.prompt_web_api()?;
         self.prompt_lfz()?;
         if !self.args.no_skills {
             self.prompt_skills()?;
         }
+        Ok(())
+    }
+
+    fn write_overview(&self) -> Result<()> {
+        write_section("Current config")?;
+        write_kv_path("config", Some(&self.context.config_path))?;
+        write_kv_path("Zotero database", self.config.zotero_db_path.as_ref())?;
+        write_kv_path("Zotero storage", self.config.zotero_storage_path.as_ref())?;
+        write_kv_path("mirror root", self.config.mirror_root.as_ref())?;
+        write_kv(
+            "Web API",
+            if self.config.web_api.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+        )?;
+        write_kv(
+            "llm-for-zotero",
+            if self.config.lfz.enabled.unwrap_or(false) {
+                "enabled"
+            } else {
+                "disabled"
+            },
+        )?;
+        let handles = if self.config.inbox.x_handles.is_empty() {
+            "(none)".to_string()
+        } else {
+            self.config.inbox.x_handles.join(", ")
+        };
+        write_kv("X paper accounts", &handles)?;
+        write_kv(
+            "high-risk auth",
+            if self.config.risk.high_risk_auth_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+        )?;
+        write_kv(
+            "alphaXiv auth",
+            if self.config.risk.alphaxiv_auth_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+        )?;
         Ok(())
     }
 
@@ -252,6 +331,68 @@ impl<'a> SetupWizard<'a> {
             self.config.lfz.claude_runtime_dir =
                 prompt_path("llm-for-zotero Claude runtime dir", default_dir)?;
         }
+        Ok(())
+    }
+
+    fn prompt_inbox_sources(&mut self) -> Result<()> {
+        write_section("Inbox sources")?;
+        write_line("Optional. `zcli inbox fetch --source x` can read a maintained list of X paper accounts through the local Bird CLI. Handles are public account names only; no X cookies or tokens are stored in zcli config.")?;
+        let current = if self.config.inbox.x_handles.is_empty() {
+            "(none)".to_string()
+        } else {
+            self.config.inbox.x_handles.join(", ")
+        };
+        write_line(&format!("Current X paper accounts: {current}"))?;
+        let raw = prompt_string(
+            "X handles comma-separated; blank keeps current, '-' clears",
+            None,
+        )?;
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        if trimmed == "-" {
+            self.config.inbox.x_handles.clear();
+            return Ok(());
+        }
+        let mut handles = Vec::new();
+        for part in trimmed.split(',') {
+            let handle = part.trim().trim_start_matches('@');
+            if handle.is_empty() {
+                continue;
+            }
+            if !handle
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+            {
+                return Err(anyhow!("invalid X handle: {handle}"));
+            }
+            if !handles.iter().any(|value: &String| value == handle) {
+                handles.push(handle.to_string());
+            }
+        }
+        handles.sort();
+        self.config.inbox.x_handles = handles;
+        Ok(())
+    }
+
+    fn prompt_risk(&mut self) -> Result<()> {
+        write_section("Advanced / high-risk auth")?;
+        write_line("Default is off. This section controls features that use login credentials, cookies, bearer tokens, browser session export, or authenticated local helper writes. Public discovery/search keeps working without these settings.")?;
+        write_line("alphaXiv Recommended/auth-refresh/auth-status can use Clerk cookies or short-lived bearer tokens. Treat those as login credentials; zcli will not print them, but enabling this allows commands to read configured cookie/token sources.")?;
+        let high_risk = prompt_bool(
+            "Enable high-risk auth features on this machine?",
+            self.config.risk.high_risk_auth_enabled,
+        )?;
+        self.config.risk.high_risk_auth_enabled = high_risk;
+        if !high_risk {
+            self.config.risk.alphaxiv_auth_enabled = false;
+            return Ok(());
+        }
+        self.config.risk.alphaxiv_auth_enabled = prompt_bool(
+            "Enable alphaXiv authenticated Recommended/auth commands?",
+            self.config.risk.alphaxiv_auth_enabled,
+        )?;
         Ok(())
     }
 
@@ -553,5 +694,24 @@ fn redacted_config(config: &Config) -> Value {
             "token_path": config.helper.token_path,
         },
         "lfz": config.lfz,
+        "inbox": {
+            "x_handles": config.inbox.x_handles,
+        },
+        "risk": {
+            "high_risk_auth_enabled": config.risk.high_risk_auth_enabled,
+            "alphaxiv_auth_enabled": config.risk.alphaxiv_auth_enabled,
+        },
     })
+}
+
+fn write_kv(label: &str, value: &str) -> Result<()> {
+    writeln!(io::stderr(), "  {label}: {value}")?;
+    Ok(())
+}
+
+fn write_kv_path(label: &str, value: Option<&PathBuf>) -> Result<()> {
+    match value {
+        Some(path) => write_kv(label, &path.display().to_string()),
+        None => write_kv(label, "(not set)"),
+    }
 }

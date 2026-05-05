@@ -1,4 +1,4 @@
 interface:
   display_name: "alphaXiv"
-  short_description: "Query alphaXiv paper feeds, search, metrics, markdown, PDFs, and zcli import plans."
-  default_prompt: "Use $alphaxiv to find high-signal alphaXiv papers and produce dry-run Zotero import plans."
+  short_description: "Query alphaXiv feeds, recent paper triage, metrics, markdown, PDFs, and zcli import plans."
+  default_prompt: "Use $alphaxiv to find recent high-signal papers, explain the triage, and produce dry-run Zotero import plans."

@@ -23,8 +23,9 @@ pub fn print_value(value: &Value, format: OutputFormat) -> Result<()> {
 }
 
 fn print_text(value: &Value) {
-    let renderers: [fn(&Value) -> bool; 7] = [
+    let renderers: [fn(&Value) -> bool; 8] = [
         print_doctor,
+        print_config_status,
         print_setup,
         print_helper,
         print_write,
@@ -66,6 +67,120 @@ fn print_text(value: &Value) {
         "{}",
         serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
     );
+}
+
+fn print_config_status(value: &Value) -> bool {
+    if value.get("config").is_none()
+        || value.get("wrote_config").is_some()
+        || value.get("mode").is_some()
+    {
+        return false;
+    }
+    let Some(config) = value.get("config") else {
+        return false;
+    };
+    println!("zcli config");
+    println!(
+        "  path: {}",
+        value
+            .get("config_path")
+            .and_then(Value::as_str)
+            .unwrap_or("(unknown)")
+    );
+    println!();
+    println!("Local Zotero");
+    print_status_path(
+        "database",
+        config
+            .get("zotero_db_path")
+            .and_then(Value::as_str)
+            .map(|_| true),
+        config.get("zotero_db_path").and_then(Value::as_str),
+    );
+    print_status_path(
+        "storage",
+        config
+            .get("zotero_storage_path")
+            .and_then(Value::as_str)
+            .map(|_| true),
+        config.get("zotero_storage_path").and_then(Value::as_str),
+    );
+    print_status_path(
+        "mirror root",
+        config
+            .get("mirror_root")
+            .and_then(Value::as_str)
+            .map(|_| true),
+        config.get("mirror_root").and_then(Value::as_str),
+    );
+
+    println!();
+    println!("Integrations");
+    if let Some(web_api) = config.get("web_api") {
+        println!(
+            "  Web API: {}",
+            if web_api
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        if let Some(library_id) = web_api.get("library_id").and_then(Value::as_str) {
+            println!("  Web API library ID: {library_id}");
+        }
+    }
+    if let Some(lfz) = config.get("lfz") {
+        println!(
+            "  llm-for-zotero: {}",
+            if lfz.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+    }
+    if let Some(handles) = config.pointer("/inbox/x_handles").and_then(Value::as_array) {
+        let handles = handles.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+        println!(
+            "  X paper accounts: {}",
+            if handles.is_empty() {
+                "(none)".to_string()
+            } else {
+                handles.join(", ")
+            }
+        );
+    }
+    if let Some(risk) = config.get("risk") {
+        println!(
+            "  high-risk auth: {}",
+            if risk
+                .get("high_risk_auth_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "  alphaXiv auth: {}",
+            if risk
+                .get("alphaxiv_auth_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+    }
+    true
 }
 
 fn print_doctor(value: &Value) -> bool {
@@ -594,6 +709,43 @@ fn print_setup(value: &Value) -> bool {
             println!(
                 "  llm-for-zotero: {}",
                 if lfz.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+        }
+        if let Some(handles) = config.pointer("/inbox/x_handles").and_then(Value::as_array) {
+            let handles = handles.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            println!(
+                "  X paper accounts: {}",
+                if handles.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    handles.join(", ")
+                }
+            );
+        }
+        if let Some(risk) = config.get("risk") {
+            println!(
+                "  high-risk auth: {}",
+                if risk
+                    .get("high_risk_auth_enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
+            println!(
+                "  alphaXiv auth: {}",
+                if risk
+                    .get("alphaxiv_auth_enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
                     "enabled"
                 } else {
                     "disabled"

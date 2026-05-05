@@ -25,6 +25,11 @@ Fast-mode behavior:
 - arXiv imports try Zotero translators first and fall back to arXiv Atom
   metadata plus PDF attachment when Zotero returns no item
 
+`zcli` owns import planning and mutation safety. The helper receives only
+validated helper payloads after `zcli import ... --dry-run` or
+`zcli write ... --dry-run` has produced the preview; it should not be treated as
+a public automation surface.
+
 Supported operation names:
 
 - `ping`
@@ -57,6 +62,7 @@ Preview writes without contacting the helper:
 
 ```sh
 zcli import arxiv 2604.06240 --dry-run
+zcli import ids 10.1145/1234567.1234568 --dry-run
 zcli import pdf ./paper.pdf --dry-run
 zcli import url https://arxiv.org/abs/2604.06240 --dry-run
 zcli write tags ITEMKEY --add review --dry-run

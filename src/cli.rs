@@ -18,6 +18,7 @@ use crate::{
         self, HelperInstallOptions, HelperPackageOptions, API_KEY_URL, API_LIBRARY_ID_HELP_URL,
     },
     import_plan::{self, PlanOptions},
+    inbox::{self, InboxSource},
     index, lfz,
     mirror::{self, MirrorMode, MirrorOptions},
     mutation::{self, MutationPlan},
@@ -739,6 +740,32 @@ pub struct LfzTurnsArgs {
 pub enum InboxCommands {
     Status,
     Fetch(InboxFetchArgs),
+    Triage(InboxFetchArgs),
+    Discussion(InboxDiscussionArgs),
+    Sources {
+        #[command(subcommand)]
+        command: InboxSourceCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InboxSourceCommands {
+    X {
+        #[command(subcommand)]
+        command: XSourceCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum XSourceCommands {
+    List,
+    Add(XHandleArgs),
+    Remove(XHandleArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct XHandleArgs {
+    pub handle: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -786,10 +813,75 @@ pub struct ExportPackArgs {
 
 #[derive(Debug, Args)]
 pub struct InboxFetchArgs {
+    pub query: Option<String>,
+    #[arg(long, value_enum, default_value = "alphaxiv")]
+    pub source: InboxSource,
+    #[arg(long, help = "X handle to read when --source x; repeatable")]
+    pub handle: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = 40,
+        help = "Posts per handle/search for --source x"
+    )]
+    pub tweet_limit: usize,
+    #[arg(long, default_value_t = 10)]
+    pub limit: usize,
+    #[arg(long, value_enum, default_value = "hot")]
+    pub fallback_sort: alphaxiv::FeedSort,
+    #[arg(long, default_value = "30 Days")]
+    pub fallback_interval: String,
+    #[arg(long = "topic")]
+    pub topics: Vec<String>,
+    #[arg(long)]
+    pub min_likes: Option<i64>,
+    #[arg(long)]
+    pub min_github_stars: Option<i64>,
+    #[arg(long)]
+    pub min_visits: Option<i64>,
+    #[arg(long)]
+    pub since: Option<String>,
+    #[arg(long)]
+    pub days: Option<i64>,
+    #[arg(long, value_enum, default_value = "any")]
+    pub date_field: alphaxiv::DateField,
+    #[arg(long, default_value_t = 20)]
+    pub timeout: u64,
+    #[arg(long, help = "Skip local Zotero/queue context-aware ranking hints")]
+    pub no_context: bool,
+    #[arg(
+        long,
+        help = "Attach a quick GitHub repository overview when a candidate links code"
+    )]
+    pub code_overview: bool,
     #[arg(long)]
     pub dry_run: bool,
     #[arg(long)]
     pub execute: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct InboxDiscussionArgs {
+    #[arg(help = "Paper title, arXiv ID, alphaXiv/Hugging Face URL, or X post URL")]
+    pub paper: String,
+    #[arg(long, help = "Author or curator X handle to prioritize; repeatable")]
+    pub handle: Vec<String>,
+    #[arg(long, help = "Known X post URL or status id to expand directly")]
+    pub tweet: Vec<String>,
+    #[arg(long, default_value_t = 30)]
+    pub days: i64,
+    #[arg(long, default_value_t = 30, help = "Search results per query")]
+    pub search_limit: usize,
+    #[arg(long, default_value_t = 3, help = "Announcement posts to expand")]
+    pub limit: usize,
+    #[arg(long, default_value_t = 80, help = "Discussion replies/items to keep")]
+    pub reply_limit: usize,
+    #[arg(long, default_value_t = 3)]
+    pub max_pages: usize,
+    #[arg(
+        long,
+        help = "Skip reply/thread expansion and only return matched posts"
+    )]
+    pub no_expand: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -895,13 +987,13 @@ pub fn dispatch(cli: &Cli, context: &Context) -> Result<Value> {
         Commands::Setup(args) => crate::setup::run(context, args),
         Commands::Recap { command } => dispatch_recap(context, command),
         Commands::Lfz { command } => dispatch_lfz(context, command),
-        Commands::Inbox { command } => dispatch_inbox(command),
+        Commands::Inbox { command } => dispatch_inbox(context, command),
         Commands::Queue { command } => dispatch_queue(context, command),
         Commands::Todo { command } => dispatch_queue(context, command),
         Commands::Export { command } => dispatch_export(context, command),
         Commands::Skill { command } => dispatch_skill(context, command),
         Commands::Helper { command } => dispatch_helper(context, command),
-        Commands::Alphaxiv { command } => alphaxiv::dispatch(command),
+        Commands::Alphaxiv { command } => alphaxiv::dispatch(command, &context.config),
     }
 }
 
@@ -1865,25 +1957,67 @@ fn dispatch_lfz(context: &Context, command: &LfzCommands) -> Result<Value> {
     }
 }
 
-fn dispatch_inbox(command: &InboxCommands) -> Result<Value> {
+fn dispatch_inbox(context: &Context, command: &InboxCommands) -> Result<Value> {
     match command {
-        InboxCommands::Status => Ok(json!({
-            "ok": true,
-            "status": "unconfigured",
-            "message": "external paper inbox source is reserved for a later implementation",
-            "dry_run_first": true,
-        })),
-        InboxCommands::Fetch(args) => {
-            if !args.dry_run && !args.execute {
-                return Err(anyhow!("inbox fetch is dry-run-first; pass --dry-run to preview or --execute for a future implementation"));
-            }
-            Ok(json!({
-                "ok": true,
-                "dry_run": args.dry_run,
-                "executed": false,
-                "status": "unavailable",
-                "message": "external paper fetching is a reserved v1 entry point and has no importer yet",
-            }))
+        InboxCommands::Status => Ok(inbox::status(&context.config)),
+        InboxCommands::Fetch(args) | InboxCommands::Triage(args) => {
+            inbox::fetch(inbox::FetchOptions {
+                config: &context.config,
+                source: args.source,
+                query: args.query.as_deref(),
+                handles: &args.handle,
+                configured_x_handles: &context.config.inbox.x_handles,
+                tweet_limit: args.tweet_limit,
+                limit: args.limit,
+                fallback_sort: args.fallback_sort,
+                fallback_interval: &args.fallback_interval,
+                topics: &args.topics,
+                min_likes: args.min_likes,
+                min_github_stars: args.min_github_stars,
+                min_visits: args.min_visits,
+                since: args.since.as_deref(),
+                days: args.days,
+                date_field: args.date_field,
+                timeout: args.timeout,
+                context: !args.no_context,
+                code_overview: args.code_overview,
+                dry_run: args.dry_run,
+                execute: args.execute,
+            })
+        }
+        InboxCommands::Discussion(args) => inbox::discussion(inbox::DiscussionOptions {
+            paper: &args.paper,
+            handles: &args.handle,
+            tweets: &args.tweet,
+            days: args.days,
+            search_limit: args.search_limit,
+            limit: args.limit,
+            reply_limit: args.reply_limit,
+            max_pages: args.max_pages,
+            expand: !args.no_expand,
+        }),
+        InboxCommands::Sources { command } => dispatch_inbox_sources(context, command),
+    }
+}
+
+fn dispatch_inbox_sources(context: &Context, command: &InboxSourceCommands) -> Result<Value> {
+    match command {
+        InboxSourceCommands::X { command } => {
+            let mut config = context.config.clone();
+            let value = match command {
+                XSourceCommands::List => inbox::x_handles(&config),
+                XSourceCommands::Add(args) => {
+                    let value = inbox::add_x_handle(&mut config, &args.handle)?;
+                    config.save(&context.config_path, true)?;
+                    value
+                }
+                XSourceCommands::Remove(args) => {
+                    let value = inbox::remove_x_handle(&mut config, &args.handle)?;
+                    config.save(&context.config_path, true)?;
+                    value
+                }
+            };
+            Ok(value)
         }
     }
 }
@@ -2376,6 +2510,13 @@ fn redacted_config(config: &Config) -> Value {
             "token_path": config.helper.token_path,
         },
         "lfz": config.lfz,
+        "inbox": {
+            "x_handles": config.inbox.x_handles,
+        },
+        "risk": {
+            "high_risk_auth_enabled": config.risk.high_risk_auth_enabled,
+            "alphaxiv_auth_enabled": config.risk.alphaxiv_auth_enabled,
+        },
     })
 }
 

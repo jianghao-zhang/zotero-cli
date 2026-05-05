@@ -5,6 +5,7 @@ mod config;
 mod date_range;
 mod helper;
 mod import_plan;
+mod inbox;
 mod index;
 mod lfz;
 mod mirror;

@@ -823,7 +823,7 @@ fn public_command_smoke_outputs_json() -> anyhow::Result<()> {
         vec!["export", "pack", "ITEM0001", "--for", "codex", "--dry-run"],
         vec!["skill", "doctor"],
         vec!["inbox", "status"],
-        vec!["inbox", "fetch", "--dry-run"],
+        vec!["inbox", "sources", "x", "list"],
     ] {
         let output = fixture
             .cmd()?
@@ -862,6 +862,45 @@ fn public_command_smoke_outputs_json() -> anyhow::Result<()> {
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["ok"], true);
     assert_eq!(value["dry_run"], true);
+    Ok(())
+}
+
+#[test]
+fn inbox_x_source_handles_are_configured_in_zcli_config() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let output = fixture
+        .cmd()?
+        .args(["inbox", "sources", "x", "add", "@paperbot"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["source"], "x");
+    assert_eq!(value["handles"][0], "paperbot");
+
+    let output = fixture
+        .cmd()?
+        .args(["inbox", "sources", "x", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["handles"][0], "paperbot");
+
+    let output = fixture
+        .cmd()?
+        .args(["inbox", "sources", "x", "remove", "paperbot"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["handles"].as_array().unwrap().len(), 0);
     Ok(())
 }
 
@@ -927,6 +966,46 @@ fn setup_existing_config_prompts_before_long_wizard() -> anyhow::Result<()> {
         .as_str()
         .unwrap()
         .contains("approved overwriting"));
+    Ok(())
+}
+
+#[test]
+fn setup_menu_can_save_without_reconfiguring_every_section() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let output = fixture
+        .cmd()?
+        .args(["setup", "--dry-run", "--no-skills"])
+        .write_stdin("s\n")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(stderr.contains("Current config"));
+    assert!(stderr.contains("Setup menu"));
+    assert!(stderr.contains("2 inbox sources"));
+    assert!(stderr.contains("7 advanced/high-risk auth"));
+    let value: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["wrote_config"], false);
+    Ok(())
+}
+
+#[test]
+fn setup_can_enable_high_risk_auth_explicitly() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let output = fixture
+        .cmd()?
+        .args(["setup", "--dry-run", "--no-skills"])
+        .write_stdin("7\ny\ny\ns\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["config"]["risk"]["high_risk_auth_enabled"], true);
+    assert_eq!(value["config"]["risk"]["alphaxiv_auth_enabled"], true);
     Ok(())
 }
 
@@ -1158,15 +1237,23 @@ claude_runtime_dir = "/tmp/lfz"
 
     let output = fixture
         .cmd()?
-        .args(["inbox", "fetch", "--execute"])
+        .args(["inbox", "status"])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
     let value: Value = serde_json::from_slice(&output)?;
-    assert_eq!(value["status"], "unavailable");
-    assert_eq!(value["executed"], false);
+    assert_eq!(value["status"], "ready");
+    assert_eq!(value["candidate_schema"], "paper_candidate/v1");
+    assert_eq!(value["sources"][0]["name"], "alphaxiv");
+
+    fixture
+        .cmd()?
+        .args(["inbox", "fetch", "agent memory", "--execute"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("read-only candidate preview"));
     Ok(())
 }
 
@@ -1219,6 +1306,20 @@ fn alphaxiv_command_surface_is_registered() -> anyhow::Result<()> {
     let text = fixture.text(["alphaxiv", "brief", "--help"])?;
     assert!(text.contains("--date-field"));
     assert!(text.contains("--days"));
+    Ok(())
+}
+
+#[test]
+fn inbox_discussion_command_surface_is_registered() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let text = fixture.text(["inbox", "--help"])?;
+    assert!(text.contains("discussion"));
+
+    let text = fixture.text(["inbox", "discussion", "--help"])?;
+    assert!(text.contains("--handle"));
+    assert!(text.contains("--tweet"));
+    assert!(text.contains("--no-expand"));
+    assert!(text.contains("--reply-limit"));
     Ok(())
 }
 
