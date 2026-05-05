@@ -1,10 +1,14 @@
 # zotero-cli
 
-Fast local Zotero CLI. The npm package is `zotero-cli`; the installed binary is `zcli`.
+Fast local Zotero CLI for paper reading, discovery, import planning, and agent workflows. The npm package is `zotero-cli`; the installed binary is `zcli`.
 
-This is currently a personal-use draft project, not a polished public release.
+This project is still a personal-use draft, but the current core loop is usable:
 
-`zcli` is CLI-only in v1. Core commands read local Zotero data and do not require external agent runtimes, Zotero Web API credentials, an MCP server, an HTTP bridge, or the optional Zotero helper plugin.
+```text
+discover papers -> triage whether they are worth reading -> preview import -> queue/tag -> build reading context
+```
+
+Core Zotero reads are local-first and do not require Zotero Web API credentials, MCP, an HTTP bridge, or the optional Zotero helper plugin. Networked discovery sources such as alphaXiv, Hugging Face Papers, and X/Bird are explicit opt-in command paths. Zotero mutations and imports are dry-run-first.
 
 Optional ecosystem links:
 
@@ -16,14 +20,29 @@ Optional ecosystem links:
 | [Hermes Agent](https://github.com/nousresearch/hermes-agent) | Optional agent skill target and export-pack target. |
 | [OpenClaw](https://github.com/openclaw/openclaw) | Optional agent skill target and export-pack target. |
 
+## What It Does Now
+
+| Need | Start here |
+| --- | --- |
+| Read/search your local Zotero library | `zcli resolve`, `zcli paper`, `zcli context`, `zcli index search`, `zcli index chunks` |
+| Find new papers | `zcli inbox fetch`, `zcli inbox triage`, `zcli alphaxiv brief` |
+| Check X discussion around one paper | `zcli inbox discussion` |
+| Preview paper import | `zcli import arxiv/ids/pdf/url --dry-run` |
+| Keep a reading queue | `zcli queue add/list/done` |
+| Generate agent context | `zcli context`, `zcli export pack`, installed `zotero-cli` skill |
+| Read recent activity or lfz chats | `zcli recap reading`, `zcli recap lfz`, `zcli lfz turn` |
+| Mirror Zotero to files | `zcli mirror rebuild/sync/watch` |
+| Execute Zotero writes | Optional helper plugin plus explicit `--execute` |
+
 ## Contents
 
 - [Quick Start](#quick-start)
+- [Core Workflows](#core-workflows)
 - [Setup](#setup)
 - [Feature Map](#feature-map)
-- [Common Workflows](#common-workflows)
-- [Paper Discovery](#paper-discovery)
+- [Local Library Workflows](#local-library-workflows)
 - [Inbox](#inbox)
+- [Paper Discovery](#paper-discovery)
 - [Recaps](#recaps)
 - [Optional llm-for-zotero Support](#optional-llm-for-zotero-support)
 - [Markdown](#markdown)
@@ -74,6 +93,40 @@ During development:
 
 ```bash
 cargo run -- doctor --format pretty
+```
+
+## Core Workflows
+
+Find and read a local paper:
+
+```bash
+zcli resolve "agent memory" --format json
+zcli paper ITEMKEY --format json
+zcli context ITEMKEY --budget 40k --format json
+zcli index chunks "credit assignment" --item ITEMKEY --format json
+```
+
+Find new papers and decide what to read:
+
+```bash
+zcli inbox fetch "coding agent harness memory" --source alphaxiv --days 30 --date-field any --dry-run --format json
+zcli inbox triage "agent memory" --source huggingface --days 30 --code-overview --dry-run --format json
+zcli alphaxiv brief "coding agent harness memory" --days 30 --date-field any --limit 8 --format text
+```
+
+Investigate author/community discussion around a paper:
+
+```bash
+zcli inbox discussion "Agentic Harness Engineering" --days 30 --format json
+zcli inbox discussion 2604.04979 --tweet https://x.com/author/status/123 --reply-limit 80 --format json
+```
+
+Preview import and then create a reading context:
+
+```bash
+zcli import arxiv 2604.25850 --dry-run --format json
+zcli queue add ITEMKEY --note "from inbox candidate" --format json
+zcli context ITEMKEY --budget 40k --format json
 ```
 
 ## Setup
@@ -150,6 +203,7 @@ Output defaults to `auto`:
 | Resolve and paper surface | `resolve`, `find paper`, `paper`, `context` | Finds an item from natural inputs such as title, short title, citation key, DOI, arXiv, URL, or file path; returns a compact paper view or builds an agent context pack. |
 | Search | `search list`, `search grep`, `search context` | Searches metadata/full text and returns matching context. |
 | Local paper index | `index status`, `index update`, `index search`, `index chunks`, `index chunk`, `index get` | Builds a local SQLite FTS5/BM25 sidecar index for repeated fast paper and passage search. No network or model is required. |
+| Unified inbox | `inbox status`, `inbox fetch`, `inbox triage`, `inbox discussion`, `inbox sources x add/list/remove` | Multi-source paper intake from alphaXiv, Hugging Face Papers, and X/Bird. Returns `paper_candidate/v1` and `paper_discussion/v1` surfaces with time semantics, triage, local context match, workflow commands, and dry-run import plans. |
 | Paper discovery | `alphaxiv feed`, `alphaxiv search`, `alphaxiv discover`, `alphaxiv brief`, `alphaxiv paper`, `alphaxiv markdown`, `alphaxiv pdf`, `alphaxiv zotero-plan` | Uses alphaXiv as a public paper discovery/metrics source, with time-window filtering, research triage, and dry-run Zotero import plans. |
 | Item reads | `item get`, `item extract`, `item annotations`, `item notes`, `item attachments`, `item bibtex`, `item markdown` | Reads Zotero item metadata, extracted text, annotations, notes, attachments, BibTeX, and paper Markdown. |
 | Markdown status | `markdown status` | Shows whether Markdown will come from lfz MinerU cache or local fallback. |
@@ -164,9 +218,9 @@ Output defaults to `auto`:
 | Agent export | `export pack` | Builds a paper pack for [Codex](https://github.com/openai/codex), [Claude Code](https://code.claude.com/docs), [Hermes Agent](https://github.com/nousresearch/hermes-agent), or [OpenClaw](https://github.com/openclaw/openclaw) style workflows. |
 | Agent skill | `skill doctor`, `skill install` | Installs the optional `zotero-cli` skill into supported agent skill roots. |
 | Helper plugin | `helper doctor`, `helper package`, `helper install` | Packages and installs the optional Zotero runtime helper for writes. |
-| Inbox | `inbox status`, `inbox fetch [QUERY] --source alphaxiv\|huggingface\|x --dry-run`, `inbox sources x add/list/remove` | Unified external paper intake entry point. It returns `paper_candidate/v1` records with source time fields, triage, metrics/social signals, and dry-run Zotero import plans. |
+| Inbox source config | `inbox sources x add/list/remove` | Maintains local public X handles for curated paper-account scans. |
 
-## Common Workflows
+## Local Library Workflows
 
 Find a paper from whatever identifier you have:
 
@@ -501,23 +555,15 @@ Internally, imports and writes share the same dry-run-first mutation executor. T
 
 ## Agent Skill
 
-The skill is optional. It teaches agents to call `zcli` directly and not depend on MCP or an adapter API.
+Agent integration is a first-class part of this repo. The installed skills teach agents to call `zcli` directly and keep Zotero reads, discovery, imports, and writes on one dry-run-first surface.
 
-There are two skill surfaces: `skills/zotero-cli/SKILL.md` is the portable external-agent skill for Codex, Claude Code, Hermes Agent, and OpenClaw; `skills/zotero-cli-lfz/SKILL.md` is the specialized [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime skill that frames `zcli` as Zotero-native paper/library access.
+Current skill surfaces:
 
-`skills/alphaxiv/SKILL.md` is a separate discovery skill. It should hand paper candidates back into `zcli import ... --dry-run` or `zcli alphaxiv zotero-plan`; it should not create a second Zotero mutation path.
-
-The `lfz` target is special: it uses `skills/zotero-cli-lfz/SKILL.md` and installs into detected [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime roots. Different Zotero profiles can have different runtime folders, so dry-run output may list multiple `target_paths`.
-
-Preview install paths:
-
-```bash
-zcli skill install --target codex --dry-run
-zcli skill install --target claude --dry-run
-zcli skill install --target hermes --dry-run
-zcli skill install --target lfz --dry-run
-zcli skill install --target openclaw --dry-run
-```
+| Skill | Purpose | Installed by |
+| --- | --- | --- |
+| `skills/zotero-cli/SKILL.md` | Portable Codex/Claude/Hermes/OpenClaw skill for Zotero library access, inbox discovery, X paper discussion, import plans, recaps, and safe writes. | `zcli skill install --target ...` |
+| `skills/zotero-cli-lfz/SKILL.md` | Specialized [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime skill. Starts from Zotero concepts and selected/pinned paper context. | `zcli skill install --target lfz` |
+| `skills/alphaxiv/SKILL.md` | alphaXiv-specific discovery/metrics skill. It hands candidates back into zcli import/inbox workflows instead of creating a parallel Zotero mutation path. | Shared skill symlink distribution |
 
 Default targets:
 
@@ -529,7 +575,17 @@ Default targets:
 | [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) Claude runtime | Detected profile roots such as `<Zotero data>/agent-runtime/profile-*/.claude/skills/zotero-cli` |
 | [OpenClaw](https://github.com/openclaw/openclaw) | `~/.openclaw/skills/zotero-cli` |
 
-On macOS/Linux the installer prefers symlinks. Use `--copy` for a copied install. [OpenClaw](https://github.com/openclaw/openclaw) is detected before install; it is not required for normal use.
+Preview or refresh install paths:
+
+```bash
+zcli skill install --target codex --dry-run
+zcli skill install --target claude --dry-run
+zcli skill install --target hermes --dry-run
+zcli skill install --target lfz --dry-run
+zcli skill install --target openclaw --dry-run
+```
+
+On macOS/Linux the installer prefers symlinks. Use `--copy` for a copied install. [OpenClaw](https://github.com/openclaw/openclaw) is detected before install; it is not required for normal use. After editing skills, run `zcli skill doctor --format json` and refresh the target installs.
 
 ## TODO / Roadmap
 
@@ -539,12 +595,12 @@ The current local CLI path is usable, but these pieces still need work before tr
 | --- | --- |
 | Web API smoke and remote mode | Add `zcli web-api doctor` or `zcli web-api ping` to validate auth, library ID, permissions, and read access against Zotero's official API. Current Web API support is configuration-only. |
 | Semantic index layer | Extend the new local index with optional GGUF embeddings, local reranking, warm daemon mode, and cached query expansion. The current shipped layer is model-free SQLite FTS5/BM25. |
-| Inbox/import pipeline | `zcli inbox fetch` now returns alphaXiv, Hugging Face, and X/Bird backed `paper_candidate/v1` previews. Next work is local Zotero duplicate scoring, queue/collection/tag handoff, and explicit import execution through the existing dry-run mutation layer. |
+| Inbox/import pipeline | `zcli inbox fetch` returns alphaXiv, Hugging Face, and X/Bird backed `paper_candidate/v1` previews. `zcli inbox discussion` returns `paper_discussion/v1` for X community context. Next work is stronger local duplicate scoring, profile-based queue/collection/tag handoff, and optional scheduled digest output. |
 | Discovery source adapters | Add arXiv/OpenAlex/Semantic Scholar/RSS/conference feeds behind the same candidate -> import-plan shape. |
 | Mirror watch hardening | Run long-duration `zcli mirror watch` tests, validate CPU/I/O over hours or days, and polish launchd/daemon installation. Current actual write testing covered small rebuilds; full-library sync has been dry-run tested. |
 | Helper execute coverage | Expand real helper tests beyond tag add/remove to notes, collections, file import/link, attachment rename, batch operations, and trash safety. |
 | Cross-environment installs | Test npm package and helper XPI on fresh Zotero 7/8/9 profiles, macOS Intel/ARM, and Linux; verify fallback Cargo builds when no prebuilt native binary is present. |
-| Agent skill installs | Verify actual symlink/copy installs for [Codex](https://github.com/openai/codex), [Claude Code](https://code.claude.com/docs), [Hermes Agent](https://github.com/nousresearch/hermes-agent), [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) runtime, and [OpenClaw](https://github.com/openclaw/openclaw), not only dry-run path detection. |
+| Agent skill installs | Codex, Claude Code, Hermes Agent, and detected [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) runtime symlink installs are verified on the primary development machine. Remaining work is fresh-machine validation and OpenClaw install coverage. |
 | Test matrix | Keep adding golden JSON tests for all public commands, fixture SQLite coverage, helper edge-case tests, and package smoke tests for npm release artifacts. |
 
 Known testing notes:

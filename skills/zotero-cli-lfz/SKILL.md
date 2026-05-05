@@ -1,6 +1,6 @@
 ---
 name: zotero-cli
-description: Use inside llm-for-zotero Claude Code mode when the agent needs Zotero-native access to papers, selected or pinned paper context, paper text, notes, annotations, collections, tags, reading history, paper import dry-run plans, alphaXiv-to-Zotero handoff, or llm-for-zotero conversation recaps through zcli.
+description: Use inside llm-for-zotero Claude Code mode when the agent needs Zotero-native paper/library access, selected or pinned paper context, paper text, annotations, notes, reading history, external paper discovery, X/community discussion around a paper, dry-run import plans, or llm-for-zotero conversation recaps through zcli.
 ---
 
 # Zotero Native Access via zcli
@@ -31,6 +31,7 @@ Do not start from runtime folders, project files, `.claude` files, or generic fi
 - One previous turn -> follow `turn_command` or call `zcli lfz turn MESSAGE_REF --format json`.
 - Import a paper by arXiv/DOI/PDF/URL -> `zcli import arxiv|ids|pdf|url ... --dry-run --format json` first.
 - External paper discovery before import -> `zcli inbox fetch [QUERY] --source alphaxiv|huggingface|x --days 30 --date-field any --dry-run --format json`, then inspect `paper_candidate/v1` `triage`, `context_match`, `workflow`, and follow the returned Zotero dry-run command.
+- X/community discussion around one known paper -> `zcli inbox discussion PAPER --format json`; add `--tweet URL` for a known announcement post or `--handle AUTHOR_OR_CURATOR` when the likely original author/account is known.
 
 ## Reading Behavior
 
@@ -49,6 +50,10 @@ For user-requested paper imports, preview first with `zcli import ... --dry-run 
 Use `import arxiv` for arXiv IDs, `import ids` for DOI/ISBN/PMID/ADS identifiers, `import pdf` for PDFs, and `import url` for arXiv/DOI/PDF/web URLs. arXiv imports try Zotero's native translator first and may fall back to arXiv Atom metadata plus PDF attachment through Zotero runtime APIs. After execute, verify important metadata with `zcli item get KEY --format json`.
 
 For external candidates, do not import from discovery sources directly. Prefer the `zotero_plan` and `workflow` embedded in `zcli inbox fetch ... --source alphaxiv|huggingface|x`; use `zcli alphaxiv zotero-plan ID --format json` only when starting from a specific alphaXiv ID. Then run the returned `zcli import ... --dry-run --format json`.
+
+## Paper Discussion
+
+Use `zcli inbox discussion` when the user asks what the authors or community said about a paper on X. Read `announcement_posts` first, then `discussion_items`. Prioritize `question`, `possible_author_answer`, `limitation_or_failure`, `benchmark_or_comparison`, and `implementation_or_data`. Treat quote coverage as best-effort; the command includes `search.queries` so sparse results can be explained without guessing.
 
 ## Conversation Recaps
 

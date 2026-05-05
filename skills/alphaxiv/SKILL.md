@@ -1,11 +1,11 @@
 ---
 name: alphaxiv
-description: Use alphaXiv as a public paper discovery and metrics source without browser, web-access, or CDP. Trigger for alphaXiv Hot/Likes/Views/GitHub/Twitter(X) feeds, alphaXiv search, recent paper triage by time window, paper metrics, markdown/PDF/overview retrieval, and Zotero/zcli dry-run import planning from alphaXiv IDs, arXiv IDs, or alphaXiv URLs.
+description: Use alphaXiv as a public paper discovery and metrics source without browser/web-access/CDP. Trigger for alphaXiv feeds, search, recent paper triage, time-window filtering, metrics, markdown/PDF/overview retrieval, Zotero dry-run import planning, and alphaXiv-to-zcli inbox handoff. For broad multi-source intake or X paper discussion, route through zcli inbox.
 ---
 
 # alphaXiv
 
-Use this skill when alphaXiv is the discovery or metrics source for papers. alphaXiv public surfaces work through normal HTTP; do not use browser automation, web-access, CDP, or login flows unless the user explicitly asks for authenticated Recommended feed support.
+Use this skill when alphaXiv itself is the discovery or metrics source. Public alphaXiv surfaces work through normal HTTP; do not use browser automation, web-access, CDP, or login flows unless the user explicitly asks for authenticated Recommended feed support.
 
 ## Safety
 
@@ -14,7 +14,14 @@ Use this skill when alphaXiv is the discovery or metrics source for papers. alph
 - Treat alphaXiv as discovery/metrics evidence. Use Zotero CLI for Zotero library reads/writes.
 - Zotero imports and notes are dry-run-first: `zcli import ... --dry-run --format json` and `zcli write note ... --dry-run --format json`. Use `--execute` only with explicit current-turn user approval.
 
-## Helper
+## Routing
+
+- alphaXiv-specific feed/search/metrics/brief -> `zcli alphaxiv ...`.
+- Broad “papers to read” across alphaXiv/Hugging Face/X -> `zcli inbox fetch ...`.
+- One known paper’s X/community discussion -> `zcli inbox discussion PAPER --format json`.
+- Zotero import/write -> use returned `zcli import ... --dry-run` or `zcli write ... --dry-run`; never invent a separate mutation path.
+
+## Commands
 
 Prefer the Rust-native `zcli alphaxiv` commands for repeatable work. Use `brief` for broad research triage, `discover` for JSON candidate pipelines, `search` for query-only lookup, and `feed` for alphaXiv ranking pages:
 
@@ -39,7 +46,13 @@ zcli alphaxiv pdf visual-primitives --download /tmp/visual-primitives.pdf --form
 zcli alphaxiv zotero-plan 2604.25850 --format json
 ```
 
-The Rust path returns normalized JSON for feeds, search, discovery, paper metadata, PDF downloads, and zcli import plans. It accepts bare alphaXiv IDs, alphaXiv URLs, arXiv abs/PDF URLs, and alphaXiv fetcher PDF URLs. `discover` and `brief` share one discovery pipeline: full search first, fast search fallback, feed fallback when too few papers are found, dedupe, time filtering, metric ranking, then Zotero dry-run import plans. Use `brief` when the user wants an agent-readable research triage: it adds read-now/skim/watch lanes, relevance reasons, metric evidence, time-window evidence, next reading commands, and Zotero dry-run commands. For recency-sensitive requests, always set a time window with `--days N` or `--since YYYY-MM-DD`; choose `--date-field first-seen` for newly appeared alphaXiv papers, `--date-field published` for paper publication date, `--date-field updated` for recently changed entries, and `--date-field any` when the user asks broadly for recent activity. Prefer `--since` for reproducible research batches. The older Python helper at `~/.agents/skills/alphaxiv/scripts/alphaxiv.py` remains a readable fallback while the Rust path is the preferred agent interface.
+The Rust path returns normalized JSON for feeds, search, discovery, paper metadata, PDF downloads, and zcli import plans. It accepts bare alphaXiv IDs, alphaXiv URLs, arXiv abs/PDF URLs, and alphaXiv fetcher PDF URLs.
+
+`discover` and `brief` share one discovery pipeline: full search, fast search fallback, feed fallback, dedupe, time filtering, metric ranking, then Zotero dry-run import plans. Use `brief` when the user wants an agent-readable triage with read-now/skim/watch lanes and import commands.
+
+For recency-sensitive requests, always set `--days N` or `--since YYYY-MM-DD`. Choose `--date-field first-seen` for newly appearing alphaXiv papers, `published` for publication date, `updated` for recently changed entries, and `any` for broad recent activity. Prefer `--since` for reproducible batches.
+
+The older Python helper at `scripts/alphaxiv.py` remains a fallback while the Rust path is the preferred agent interface.
 
 When the user wants a broader "papers to read" intake surface rather than alphaXiv-specific output, route through `zcli inbox fetch [QUERY] --source alphaxiv|huggingface|x --days N --date-field any --dry-run --format json`. It wraps source-specific discovery into `paper_candidate/v1` records; alphaXiv remains the strongest alphaXiv-specific adapter, while Hugging Face and X/Bird cover daily HF papers, HF search, and curated X paper accounts. Inbox candidates add local Zotero/queue context matching, source-specific time semantics, workflow commands, and optional quick GitHub code overview via `--code-overview`.
 
