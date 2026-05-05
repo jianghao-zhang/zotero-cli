@@ -11,6 +11,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::{json, Value};
 
 use crate::{
+    alphaxiv,
     config::{Config, WebApiConfig},
     date_range::DateRange,
     helper::{
@@ -130,6 +131,10 @@ pub enum Commands {
     Helper {
         #[command(subcommand)]
         command: HelperCommands,
+    },
+    Alphaxiv {
+        #[command(subcommand)]
+        command: alphaxiv::AlphaXivCommands,
     },
 }
 
@@ -894,6 +899,7 @@ pub fn dispatch(cli: &Cli, context: &Context) -> Result<Value> {
         Commands::Export { command } => dispatch_export(context, command),
         Commands::Skill { command } => dispatch_skill(context, command),
         Commands::Helper { command } => dispatch_helper(context, command),
+        Commands::Alphaxiv { command } => alphaxiv::dispatch(command),
     }
 }
 

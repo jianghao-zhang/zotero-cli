@@ -1185,6 +1185,50 @@ fn setup_can_write_temp_config_and_all_skill_targets_have_dry_run() -> anyhow::R
     Ok(())
 }
 
+#[test]
+fn alphaxiv_command_surface_is_registered() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let output = fixture
+        .cmd()?
+        .args(["alphaxiv", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output)?;
+    assert!(text.contains("zcli alphaxiv"));
+    assert!(text.contains("zotero-plan"));
+    assert!(text.contains("auth-refresh"));
+    assert!(text.contains("discover"));
+    assert!(text.contains("brief"));
+
+    let output = fixture
+        .cmd()?
+        .args(["alphaxiv", "search", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output)?;
+    assert!(text.contains("--rank-metrics"));
+    assert!(text.contains("--with-zotero-plan"));
+
+    let output = fixture
+        .cmd()?
+        .args(["alphaxiv", "brief", "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output)?;
+    assert!(text.contains("--date-field"));
+    assert!(text.contains("--days"));
+    Ok(())
+}
+
 fn create_schema(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(
         r#"

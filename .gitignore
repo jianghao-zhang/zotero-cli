@@ -24,3 +24,9 @@ target
 refs
 npm/native/
 *.tgz
+
+# Local OS/Python artifacts
+.DS_Store
+**/.DS_Store
+__pycache__/
+*.py[cod]

@@ -41,6 +41,9 @@ fn print_text(value: &Value) {
     if print_examples(value) {
         return;
     }
+    if print_alphaxiv(value) {
+        return;
+    }
     if let Some(message) = value.get("message").and_then(Value::as_str) {
         println!("{message}");
         return;
@@ -394,6 +397,133 @@ fn print_examples(value: &Value) -> bool {
         println!("  {name}: {command}");
     }
     true
+}
+
+fn print_alphaxiv(value: &Value) -> bool {
+    if value.get("source").and_then(Value::as_str) != Some("alphaxiv") {
+        return false;
+    }
+    if let Some(papers) = value.get("papers").and_then(Value::as_array) {
+        let count = value
+            .get("count")
+            .and_then(Value::as_i64)
+            .unwrap_or(papers.len() as i64);
+        if let Some(mode) = value.get("mode").and_then(Value::as_str) {
+            println!("alphaXiv {mode}: {count} papers");
+            if mode == "brief" {
+                if let Some(window) = value.get("time_window") {
+                    let since = window
+                        .get("since")
+                        .and_then(Value::as_str)
+                        .and_then(|value| value.split('T').next())
+                        .unwrap_or("-");
+                    let date_field = window
+                        .get("date_field")
+                        .and_then(Value::as_str)
+                        .unwrap_or("-");
+                    println!("window: {date_field} since {since}");
+                }
+                if let Some(counts) = value.get("triage_counts") {
+                    println!(
+                        "triage: read_now:{} skim:{} watch:{}",
+                        counts.get("read_now").and_then(Value::as_i64).unwrap_or(0),
+                        counts.get("skim").and_then(Value::as_i64).unwrap_or(0),
+                        counts.get("watch").and_then(Value::as_i64).unwrap_or(0)
+                    );
+                }
+                println!();
+            }
+        } else if let Some(query) = value.get("query").and_then(Value::as_str) {
+            println!("alphaXiv search: {query} ({count} papers)");
+        } else {
+            println!("alphaXiv papers: {count}");
+        }
+        for (idx, paper) in papers.iter().enumerate() {
+            let id = paper
+                .get("alphaxiv_id")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            let title = paper
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled");
+            let metrics = paper.get("metrics").unwrap_or(&Value::Null);
+            let likes = metrics
+                .get("public_total_votes")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let stars = metrics
+                .get("github_stars")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let visits = metrics
+                .get("visits_7d")
+                .or_else(|| metrics.get("visits_all"))
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let date = paper
+                .get("first_seen_at")
+                .or_else(|| paper.get("published_at"))
+                .or_else(|| paper.get("updated_at"))
+                .and_then(Value::as_str)
+                .and_then(|value| value.split('T').next())
+                .unwrap_or("-");
+            let lane = paper
+                .pointer("/triage/lane")
+                .and_then(Value::as_str)
+                .map(|lane| format!("  {lane}"))
+                .unwrap_or_default();
+            println!(
+                "{}. {}  {}  likes:{} stars:{} visits:{}{}",
+                idx + 1,
+                id,
+                date,
+                likes,
+                stars,
+                visits,
+                lane
+            );
+            println!("   {title}");
+            if let Some(reasons) = paper.pointer("/triage/reasons").and_then(Value::as_array) {
+                let reasons = reasons
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .take(3)
+                    .collect::<Vec<_>>();
+                if !reasons.is_empty() {
+                    println!("   why: {}", reasons.join("; "));
+                }
+            }
+            if let Some(url) = paper.get("url").and_then(Value::as_str) {
+                println!("   {url}");
+            }
+            if let Some(command) = paper
+                .pointer("/zotero_plan/dry_run_commands/0")
+                .and_then(Value::as_str)
+            {
+                println!("   {command}");
+            }
+        }
+        if let Some(hint) = value.get("selection_hint").and_then(Value::as_str) {
+            println!();
+            println!("{hint}");
+        }
+        return true;
+    }
+    if value.get("import_strategy").is_some() {
+        let id = value.get("id").and_then(Value::as_str).unwrap_or("-");
+        println!("alphaXiv Zotero plan: {id}");
+        if let Some(strategy) = value.get("import_strategy").and_then(Value::as_str) {
+            println!("  strategy: {strategy}");
+        }
+        if let Some(commands) = value.get("dry_run_commands").and_then(Value::as_array) {
+            for command in commands.iter().filter_map(Value::as_str) {
+                println!("  {command}");
+            }
+        }
+        return true;
+    }
+    false
 }
 
 fn print_setup(value: &Value) -> bool {

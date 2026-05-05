@@ -1,4 +1,5 @@
 mod activity;
+mod alphaxiv;
 mod cli;
 mod config;
 mod date_range;
