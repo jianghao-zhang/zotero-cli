@@ -191,9 +191,34 @@ fn print_doctor(value: &Value) -> bool {
     println!("zcli doctor");
     println!();
 
+    if let Some(version) = value.get("version").and_then(Value::as_str) {
+        println!("Runtime");
+        println!("  version: {version}");
+        if let Some(runtime) = value.get("runtime") {
+            if let Some(path) = runtime.get("current_exe").and_then(Value::as_str) {
+                println!("  current exe: {path}");
+            }
+            if let Some(path) = runtime.get("path_zcli").and_then(Value::as_str) {
+                println!("  PATH zcli: {path}");
+            }
+            if let Some(matches) = runtime
+                .get("path_zcli_matches_current_exe")
+                .and_then(Value::as_bool)
+            {
+                println!("  PATH matches current exe: {}", yes_no(matches));
+            }
+        }
+        println!();
+    }
+
     if let Some(path) = value.get("config_path").and_then(Value::as_str) {
         println!("Config");
         println!("  path: {path}");
+        if let Some(paths) = value.get("paths") {
+            print_nested_path("mirror root", paths.get("mirror_root"));
+            print_nested_path("cache", paths.get("cache_dir"));
+            print_nested_path("state", paths.get("state_dir"));
+        }
         println!();
     }
 
@@ -250,6 +275,60 @@ fn print_doctor(value: &Value) -> bool {
             println!("  find library id: {url}");
         }
         println!("  core commands use network: no");
+        println!();
+    }
+
+    if let Some(inbox) = value.get("inbox") {
+        println!("Inbox");
+        if let Some(schema) = inbox.get("schema").and_then(Value::as_str) {
+            println!("  candidate schema: {schema}");
+        }
+        if let Some(schema) = inbox.get("discussion_schema").and_then(Value::as_str) {
+            println!("  discussion schema: {schema}");
+        }
+        if let Some(sources) = inbox.get("sources").and_then(Value::as_array) {
+            let sources = sources
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("  sources: {sources}");
+        }
+        if let Some(handles) = inbox.get("x_handles").and_then(Value::as_array) {
+            let handles = handles.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+            println!(
+                "  X paper accounts: {}",
+                if handles.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    handles.join(", ")
+                }
+            );
+        }
+        print_nested_path("bird CLI", inbox.get("bird_cli"));
+        println!("  dry-run first: yes");
+        println!();
+    }
+
+    if let Some(risk) = value.get("risk") {
+        println!("Risk-gated features");
+        println!(
+            "  high-risk auth: {}",
+            enabled_disabled(
+                risk.get("high_risk_auth_enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            )
+        );
+        println!(
+            "  alphaXiv auth: {}",
+            enabled_disabled(
+                risk.get("alphaxiv_auth_enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            )
+        );
+        println!("  default for new users: disabled");
         println!();
     }
 
@@ -314,6 +393,32 @@ fn print_doctor(value: &Value) -> bool {
         println!();
     }
 
+    if let Some(skills) = value.get("skills") {
+        println!("Agent skills");
+        if let Some(targets) = skills.get("targets").and_then(Value::as_array) {
+            for target in targets {
+                let name = target
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let installed = target
+                    .get("installed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let symlink = target
+                    .get("is_symlink")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                println!(
+                    "  {name}: {}{}",
+                    if installed { "installed" } else { "missing" },
+                    if symlink { " (symlink)" } else { "" }
+                );
+            }
+        }
+        println!();
+    }
+
     println!("Boundaries");
     println!("  core Zotero access: local read-only");
     println!("  MCP server: no");
@@ -328,6 +433,25 @@ fn print_doctor(value: &Value) -> bool {
     println!("  paper view:   zcli paper ITEMKEY --format pretty");
     println!("  agent pack:   zcli context ITEMKEY --budget 40k --format json");
     true
+}
+
+fn enabled_disabled(value: bool) -> &'static str {
+    if value {
+        "enabled"
+    } else {
+        "disabled"
+    }
+}
+
+fn print_nested_path(label: &str, value: Option<&Value>) {
+    let Some(value) = value else {
+        return;
+    };
+    print_status_path(
+        label,
+        value.get("exists").and_then(Value::as_bool),
+        value.get("path").and_then(Value::as_str),
+    );
 }
 
 fn print_write(value: &Value) -> bool {

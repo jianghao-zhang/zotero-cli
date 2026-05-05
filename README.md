@@ -167,7 +167,10 @@ zcli setup --dry-run
 zcli setup --defaults
 zcli config init
 zcli config status --format text
+zcli doctor --format text
 ```
+
+`zcli doctor` is the broad health check. It reports the running binary and PATH `zcli`, config paths, local Zotero database/storage, Web API key presence without exposing the key, inbox schemas and X/Bird readiness, risk-gated auth flags, helper availability, llm-for-zotero tables, and agent skill distribution status. It does not use network for core Zotero checks.
 
 Default config paths:
 

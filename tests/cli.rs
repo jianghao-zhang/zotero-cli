@@ -122,6 +122,12 @@ fn doctor_and_web_api_config_are_json_first() -> anyhow::Result<()> {
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["ok"], true);
     assert_eq!(value["mode"], "local_read_only");
+    assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(value["inbox"]["schema"], "paper_candidate/v1");
+    assert_eq!(value["inbox"]["discussion_schema"], "paper_discussion/v1");
+    assert_eq!(value["inbox"]["sources"][0], "alphaxiv");
+    assert_eq!(value["risk"]["high_risk_auth_enabled"], false);
+    assert_eq!(value["skills"]["source_exists"], true);
     assert_eq!(value["web_api"]["api_key_present"], true);
     assert_eq!(
         value["web_api"]["api_key_url"],
@@ -135,6 +141,9 @@ fn doctor_and_web_api_config_are_json_first() -> anyhow::Result<()> {
 
     let text = fixture.text(["--format", "text", "doctor"])?;
     assert!(text.contains("zcli doctor"));
+    assert!(text.contains("Runtime"));
+    assert!(text.contains("Inbox"));
+    assert!(text.contains("Agent skills"));
     assert!(text.contains("core Zotero access: local read-only"));
     Ok(())
 }

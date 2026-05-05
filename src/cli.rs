@@ -1000,6 +1000,9 @@ pub fn dispatch(cli: &Cli, context: &Context) -> Result<Value> {
 fn doctor(context: &Context) -> Result<Value> {
     let db_path = context.config.zotero_db_path.clone();
     let storage_path = context.config.zotero_storage_path.clone();
+    let mirror_root = context.config.mirror_root.clone();
+    let cache_dir = context.config.cache_dir.clone();
+    let state_dir = context.config.state_dir.clone();
     let db_available = db_path
         .as_deref()
         .map(|path| path.exists())
@@ -1009,10 +1012,25 @@ fn doctor(context: &Context) -> Result<Value> {
         .map(|path| path.exists())
         .unwrap_or(false);
     let db = ZoteroDb::open(&context.config).ok();
+    let current_exe = env::current_exe().ok();
+    let path_zcli = find_on_path("zcli");
+    let current_exe_canonical = current_exe.as_deref().and_then(canonicalize_ok);
+    let path_zcli_canonical = path_zcli.as_deref().and_then(canonicalize_ok);
     Ok(json!({
         "ok": true,
         "mode": "local_read_only",
+        "version": env!("CARGO_PKG_VERSION"),
+        "runtime": {
+            "current_exe": current_exe,
+            "path_zcli": path_zcli,
+            "path_zcli_matches_current_exe": current_exe_canonical.is_some() && current_exe_canonical == path_zcli_canonical,
+        },
         "config_path": context.config_path,
+        "paths": {
+            "mirror_root": path_status(mirror_root.as_deref()),
+            "cache_dir": path_status(cache_dir.as_deref()),
+            "state_dir": path_status(state_dir.as_deref()),
+        },
         "zotero": {
             "db_path": db_path,
             "db_available": db_available,
@@ -1020,8 +1038,35 @@ fn doctor(context: &Context) -> Result<Value> {
             "storage_available": storage_available,
         },
         "web_api": web_api_status(&context.config.web_api),
+        "risk": {
+            "high_risk_auth_enabled": context.config.risk.high_risk_auth_enabled,
+            "alphaxiv_auth_enabled": context.config.risk.alphaxiv_auth_enabled,
+            "defaults_for_new_users": {
+                "high_risk_auth_enabled": false,
+                "alphaxiv_auth_enabled": false,
+            }
+        },
+        "inbox": {
+            "schema": "paper_candidate/v1",
+            "discussion_schema": "paper_discussion/v1",
+            "dry_run_first": true,
+            "sources": ["alphaxiv", "huggingface", "x"],
+            "x_handles": context.config.inbox.x_handles,
+            "x_handle_count": context.config.inbox.x_handles.len(),
+            "bird_cli": path_status(find_on_path("bird").as_deref()),
+            "capabilities": [
+                "multi_source_fetch",
+                "triage",
+                "time_semantics",
+                "local_context_match",
+                "zotero_import_plan",
+                "quick_code_overview",
+                "x_paper_discussion"
+            ],
+        },
         "helper": helper::doctor(&context.config)?,
         "lfz": lfz::doctor(&context.config, db.as_ref())?,
+        "skills": skill::doctor(&context.config)?,
         "boundaries": {
             "mcp_server": false,
             "http_bridge": false,
@@ -1030,6 +1075,28 @@ fn doctor(context: &Context) -> Result<Value> {
             "network_required_for_core": false
         }
     }))
+}
+
+fn path_status(path: Option<&Path>) -> Value {
+    json!({
+        "path": path,
+        "exists": path.map(|path| path.exists()).unwrap_or(false),
+    })
+}
+
+fn canonicalize_ok(path: &Path) -> Option<PathBuf> {
+    fs::canonicalize(path).ok()
+}
+
+fn find_on_path(bin: &str) -> Option<PathBuf> {
+    let paths = env::var_os("PATH")?;
+    for dir in env::split_paths(&paths) {
+        let candidate = dir.join(bin);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn examples() -> Result<Value> {
