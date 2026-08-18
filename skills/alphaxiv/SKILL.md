@@ -26,8 +26,8 @@ Use this skill when alphaXiv itself is the discovery or metrics source. Public a
 Prefer the Rust-native `zcli alphaxiv` commands for repeatable work. Use `brief` for broad research triage, `discover` for JSON candidate pipelines, `search` for query-only lookup, and `feed` for alphaXiv ranking pages:
 
 ```bash
-zcli alphaxiv feed --sort hot --interval "All time" --limit 100 --format json
-zcli alphaxiv feed --sort likes --interval "30 Days" --limit 100 --format json
+zcli alphaxiv feed --sort hot --interval "3 Days" --limit 30 --format json
+zcli alphaxiv feed --sort likes --interval "30 Days" --limit 30 --format json
 zcli alphaxiv feed --sort github --interval "30 Days" --min-github-stars 5 --rank-metrics --limit 30 --format json
 zcli alphaxiv feed --sort hot --days 7 --date-field first-seen --rank-metrics --limit 30 --format json
 zcli alphaxiv auth-refresh --format json
@@ -46,7 +46,7 @@ zcli alphaxiv pdf visual-primitives --download /tmp/visual-primitives.pdf --form
 zcli alphaxiv zotero-plan 2604.25850 --format json
 ```
 
-The Rust path returns normalized JSON for feeds, search, discovery, paper metadata, PDF downloads, and zcli import plans. It accepts bare alphaXiv IDs, alphaXiv URLs, arXiv abs/PDF URLs, and alphaXiv fetcher PDF URLs.
+The Rust path returns normalized JSON for feeds, search, discovery, paper metadata, PDF downloads, and zcli import plans. It accepts bare alphaXiv IDs, alphaXiv URLs, arXiv abs/PDF URLs, and alphaXiv fetcher PDF URLs. For daily screening, prefer 20-30 candidates instead of page-size-100 dumps.
 
 `discover` and `brief` share one discovery pipeline: full search, fast search fallback, feed fallback, dedupe, time filtering, metric ranking, then Zotero dry-run import plans. Use `brief` when the user wants an agent-readable triage with read-now/skim/watch lanes and import commands.
 
@@ -54,7 +54,7 @@ For recency-sensitive requests, always set `--days N` or `--since YYYY-MM-DD`. C
 
 The older Python helper at `scripts/alphaxiv.py` remains a fallback while the Rust path is the preferred agent interface.
 
-When the user wants a broader "papers to read" intake surface rather than alphaXiv-specific output, route through `zcli inbox fetch [QUERY] --source alphaxiv|huggingface|x --days N --date-field any --dry-run --format json`. It wraps source-specific discovery into `paper_candidate/v1` records; alphaXiv remains the strongest alphaXiv-specific adapter, while Hugging Face and X/Bird cover daily HF papers, HF search, and curated X paper accounts. Inbox candidates add local Zotero/queue context matching, source-specific time semantics, workflow commands, and optional quick GitHub code overview via `--code-overview`.
+When the user wants a broader "papers to read" intake surface rather than alphaXiv-specific output, route through `zcli inbox fetch [QUERY] --source alphaxiv|huggingface|x --days N --date-field any --dry-run --format json`. For alphaXiv daily screening, use `zcli inbox fetch --source alphaxiv --sort hot --interval "3 Days" --limit 30 --dry-run --format json`; after review, `--execute` only marks displayed candidates as seen. It wraps source-specific discovery into `paper_candidate/v1` records; alphaXiv remains the strongest alphaXiv-specific adapter, while Hugging Face and X/Bird cover daily HF papers, HF search, and curated X paper accounts. Inbox candidates add local Zotero/queue context matching, source-specific time semantics, workflow commands, hidden Zotero/seen duplicates, cached alphaXiv overview markdown, and optional quick GitHub code overview via `--code-overview`.
 
 When the user wants X discussion around one known alphaXiv/arXiv paper, route through `zcli inbox discussion PAPER --format json` rather than alphaXiv comments alone. Pass the paper title, arXiv ID, or alphaXiv URL; add `--handle AUTHOR_OR_CURATOR` or `--tweet URL` when known. The output separates announcement posts from high-value questions, possible author answers, limitations, benchmark/comparison notes, and code/data/reproduction discussion.
 

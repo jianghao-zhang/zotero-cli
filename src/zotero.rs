@@ -8,11 +8,11 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use regex::Regex;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{activity, config::Config, date_range::DateRange};
+use crate::{activity, config::Config, date_range::DateRange, paths::open_sqlite_readonly};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItemSummary {
@@ -143,13 +143,8 @@ impl ZoteroDb {
             .zotero_db_path
             .as_ref()
             .ok_or_else(|| anyhow!("zotero_db_path is not configured"))?;
-        let uri = sqlite_readonly_uri(db_path);
-        let conn = Connection::open_with_flags(
-            &uri,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-        )
-        .or_else(|_| Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY))
-        .with_context(|| format!("failed to open Zotero database {}", db_path.display()))?;
+        let conn = open_sqlite_readonly(db_path)
+            .with_context(|| format!("failed to open Zotero database {}", db_path.display()))?;
         conn.busy_timeout(Duration::from_secs(5))?;
         Ok(Self {
             conn,
@@ -701,7 +696,7 @@ impl ZoteroDb {
         prefer_lfz_full_md: bool,
     ) -> Result<MarkdownDocument> {
         let detail = self.get_item(key)?;
-        if prefer_lfz_full_md && config.lfz.enabled.unwrap_or(false) {
+        if prefer_lfz_full_md {
             if let Some(path) = self.find_lfz_full_md(config, &detail)? {
                 let markdown = fs::read_to_string(&path)
                     .with_context(|| format!("failed to read {}", path.display()))?;
@@ -1451,21 +1446,6 @@ fn row_to_base_item(row: &Row<'_>) -> rusqlite::Result<BaseItemRow> {
         date_added: row.get(3)?,
         date_modified: row.get(4)?,
     })
-}
-
-fn sqlite_readonly_uri(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    let mut escaped = String::with_capacity(raw.len());
-    for byte in raw.bytes() {
-        match byte {
-            b' ' => escaped.push_str("%20"),
-            b'#' => escaped.push_str("%23"),
-            b'?' => escaped.push_str("%3F"),
-            b'%' => escaped.push_str("%25"),
-            _ => escaped.push(byte as char),
-        }
-    }
-    format!("file:{escaped}?mode=ro&immutable=1")
 }
 
 fn sql_value_to_string(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<String>> {

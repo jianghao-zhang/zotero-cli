@@ -16,6 +16,8 @@ pub struct Config {
     #[serde(default)]
     pub web_api: WebApiConfig,
     #[serde(default)]
+    pub local_api: LocalApiConfig,
+    #[serde(default)]
     pub helper: HelperConfig,
     #[serde(default)]
     pub lfz: LfzConfig,
@@ -23,6 +25,23 @@ pub struct Config {
     pub inbox: InboxConfig,
     #[serde(default)]
     pub risk: RiskConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalApiConfig {
+    pub enabled: bool,
+    pub endpoint: String,
+    pub key_path: Option<PathBuf>,
+}
+
+impl Default for LocalApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            endpoint: "http://127.0.0.1:23119/api".to_string(),
+            key_path: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,6 +202,15 @@ impl Config {
         }
         if self.web_api.api_key_env.is_none() {
             self.web_api.api_key_env = Some("ZOTERO_API_KEY".to_string());
+        }
+        if self.local_api.endpoint.trim().is_empty() {
+            self.local_api.endpoint = "http://127.0.0.1:23119/api".to_string();
+        }
+        if self.local_api.key_path.is_none() {
+            self.local_api.key_path = self
+                .state_dir
+                .as_ref()
+                .map(|dir| dir.join("local-api-key.json"));
         }
         if self.helper.endpoint.trim().is_empty() {
             self.helper.endpoint = "http://127.0.0.1:23119/zcli-helper".to_string();

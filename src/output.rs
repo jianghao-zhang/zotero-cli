@@ -23,11 +23,13 @@ pub fn print_value(value: &Value, format: OutputFormat) -> Result<()> {
 }
 
 fn print_text(value: &Value) {
-    let renderers: [fn(&Value) -> bool; 8] = [
+    let renderers: [fn(&Value) -> bool; 10] = [
+        print_read,
         print_doctor,
         print_config_status,
         print_setup,
         print_helper,
+        print_local_api,
         print_write,
         print_mirror_status,
         print_examples,
@@ -67,6 +69,33 @@ fn print_text(value: &Value) {
         "{}",
         serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
     );
+}
+
+fn print_read(value: &Value) -> bool {
+    if value.get("schema").and_then(Value::as_str) != Some("zotero_reading_surface/v1") {
+        return false;
+    }
+    if value.get("ok").and_then(Value::as_bool) != Some(true) {
+        println!(
+            "Unable to prepare PDF: {}",
+            value
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown reason")
+        );
+        return true;
+    }
+    let title = value
+        .pointer("/item/title")
+        .and_then(Value::as_str)
+        .unwrap_or("Untitled paper");
+    let link = value
+        .pointer("/response/open_pdf_markdown")
+        .and_then(Value::as_str)
+        .unwrap_or("PDF prepared");
+    println!("{title}");
+    println!("{link}");
+    true
 }
 
 fn print_config_status(value: &Value) -> bool {
@@ -278,6 +307,30 @@ fn print_doctor(value: &Value) -> bool {
         println!();
     }
 
+    if let Some(local_api) = value.get("local_api") {
+        println!("Zotero Local API");
+        println!(
+            "  status: {}",
+            local_api
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        );
+        if let Some(version) = local_api.get("zotero_version").and_then(Value::as_str) {
+            println!("  Zotero: {version}");
+        }
+        if let Some(endpoint) = local_api.get("endpoint").and_then(Value::as_str) {
+            println!("  endpoint: {endpoint}");
+        }
+        print_status_path(
+            "authorization",
+            local_api.get("key_present").and_then(Value::as_bool),
+            local_api.get("key_path").and_then(Value::as_str),
+        );
+        println!("  standard writes: tags, collections, notes");
+        println!();
+    }
+
     if let Some(inbox) = value.get("inbox") {
         println!("Inbox");
         if let Some(schema) = inbox.get("schema").and_then(Value::as_str) {
@@ -420,7 +473,8 @@ fn print_doctor(value: &Value) -> bool {
     }
 
     println!("Boundaries");
-    println!("  core Zotero access: local read-only");
+    println!("  core Zotero reads: local SQLite");
+    println!("  standard writes: Zotero Local API");
     println!("  MCP server: no");
     println!("  required HTTP bridge: no");
     println!("  optional helper endpoint: yes, only if installed");
@@ -455,7 +509,11 @@ fn print_nested_path(label: &str, value: Option<&Value>) {
 }
 
 fn print_write(value: &Value) -> bool {
-    let Some(op) = value.get("helper_op").and_then(Value::as_str) else {
+    let Some(op) = value
+        .get("operation")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("helper_op").and_then(Value::as_str))
+    else {
         return false;
     };
     let dry_run = value
@@ -465,10 +523,34 @@ fn print_write(value: &Value) -> bool {
     println!("zcli write");
     println!();
     println!("  operation: {op}");
+    println!(
+        "  transport: {}",
+        value
+            .get("transport")
+            .and_then(Value::as_str)
+            .unwrap_or("helper")
+    );
     println!("  dry run: {}", yes_no(dry_run));
     if dry_run {
         println!("  executed: no");
-        println!("  helper required for execute: yes");
+        println!(
+            "  Local API required for execute: {}",
+            yes_no(
+                value
+                    .get("local_api_required_for_execute")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            )
+        );
+        println!(
+            "  helper required for execute: {}",
+            yes_no(
+                value
+                    .get("helper_required_for_execute")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            )
+        );
         if let Some(preview) = value.get("preview") {
             if let Some(target) = preview.get("target") {
                 let key = target.get("key").and_then(Value::as_str).unwrap_or("-");
@@ -486,7 +568,7 @@ fn print_write(value: &Value) -> bool {
         println!("  executed: yes");
         if let Some(result) = value.get("result") {
             println!(
-                "  helper result: {}",
+                "  result: {}",
                 if result.get("ok").and_then(Value::as_bool).unwrap_or(false) {
                     "ok"
                 } else {
@@ -494,6 +576,36 @@ fn print_write(value: &Value) -> bool {
                 }
             );
         }
+    }
+    true
+}
+
+fn print_local_api(value: &Value) -> bool {
+    if value.get("endpoint").is_none()
+        || value.get("key_path").is_none()
+        || value.get("source").is_some()
+    {
+        return false;
+    }
+    println!("Zotero Local API");
+    println!(
+        "  status: {}",
+        value.get("status").and_then(Value::as_str).unwrap_or(
+            if value.get("dry_run").and_then(Value::as_bool) == Some(true) {
+                "authorization preview"
+            } else {
+                "unknown"
+            }
+        )
+    );
+    if let Some(endpoint) = value.get("endpoint").and_then(Value::as_str) {
+        println!("  endpoint: {endpoint}");
+    }
+    if let Some(path) = value.get("key_path").and_then(Value::as_str) {
+        println!("  key record: {path}");
+    }
+    if value.get("will_prompt_in_zotero").and_then(Value::as_bool) == Some(true) {
+        println!("  next: zcli local-api authorize --execute");
     }
     true
 }

@@ -55,7 +55,7 @@ pub fn identifiers(
             "existing_matches": existing,
         }));
     }
-    Ok(MutationPlan::new(
+    Ok(MutationPlan::helper(
         "import_identifiers",
         json!({
         "identifiers": helper_identifiers,
@@ -115,7 +115,7 @@ pub fn pdfs(
         }));
     }
     Ok(
-        MutationPlan::new(
+        MutationPlan::helper(
             "import_pdfs",
             json!({
                 "sources": helper_sources,
@@ -189,7 +189,7 @@ pub fn urls(
         }));
     }
     Ok(
-        MutationPlan::new(
+        MutationPlan::helper(
             "import_urls",
             json!({
                 "urls": helper_urls,
@@ -456,7 +456,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(plan.helper_op, "import_identifiers");
+        assert_eq!(plan.op, "import_identifiers");
         assert_eq!(plan.preview["sources"][0]["value"], "2604.25850v3");
         assert_eq!(plan.preview["duplicate_check"], "unavailable");
         assert_eq!(plan.params["identifiers"][0]["kind"], "arxiv");
@@ -476,7 +476,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(plan.helper_op, "import_pdfs");
+        assert_eq!(plan.op, "import_pdfs");
         assert_eq!(plan.preview["sources"][0]["kind"], "pdf_url");
         assert_eq!(plan.params["sources"][0]["url"], inputs[0]);
     }

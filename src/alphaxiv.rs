@@ -1,4 +1,9 @@
-use std::{fs, path::PathBuf, process::Command, time::Duration};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -1237,7 +1242,7 @@ fn attach_zotero_plans(papers: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
-fn feed(args: &FeedArgs) -> Result<Value> {
+pub fn feed(args: &FeedArgs) -> Result<Value> {
     let client = client(args.timeout);
     let cutoff = since_cutoff(&args.since, args.days)?;
     let mut papers = Vec::new();
@@ -1698,6 +1703,67 @@ fn markdown(args: &MarkdownArgs) -> Result<Value> {
         "truncated": args.max_chars > 0 && text.chars().count() > args.max_chars,
         "output": args.output,
         "markdown": shown,
+    }))
+}
+
+fn safe_cache_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn cache_is_fresh(path: &PathBuf, ttl_days: i64) -> bool {
+    if ttl_days <= 0 {
+        return false;
+    }
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age < Duration::from_secs(ttl_days as u64 * 86_400))
+}
+
+pub fn cache_overview_markdown(
+    config: &Config,
+    paper_id: &str,
+    timeout: u64,
+    ttl_days: i64,
+) -> Result<Value> {
+    let paper_id = paper_id_from_input(paper_id);
+    let root = config
+        .cache_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(".zcli-cache"))
+        .join("alphaxiv")
+        .join("overview-md");
+    let path = root.join(format!("{}.md", safe_cache_name(&paper_id)));
+    let url = format!("{WEB_BASE}/overview/{paper_id}.md");
+
+    let mut refreshed = false;
+    if !cache_is_fresh(&path, ttl_days) {
+        let client = client(timeout);
+        let text = request_text(&client, &url)?;
+        fs::create_dir_all(&root)?;
+        fs::write(&path, text).with_context(|| format!("failed to write {}", path.display()))?;
+        refreshed = true;
+    }
+    let bytes = fs::metadata(&path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    Ok(json!({
+        "kind": "overview_markdown",
+        "url": url,
+        "path": path,
+        "bytes": bytes,
+        "ttl_days": ttl_days,
+        "refreshed": refreshed,
     }))
 }
 

@@ -1,7 +1,7 @@
 var ZcliHelper = {
   endpointPath: "/zcli-helper",
-  version: "0.1.0",
-  protocolVersion: 1,
+  version: "0.2.0",
+  protocolVersion: 2,
   notifierID: "zcli-helper",
   token: null,
   startupError: null,
@@ -142,6 +142,9 @@ var ZcliHelper = {
       tokenPath: this.tokenPath(),
       startupError: this.startupError,
       capabilities: this.capabilities(),
+      legacyCapabilities: ["apply_tags", "move_to_collection", "create_note"],
+      role: "translator-and-filesystem-bridge",
+      nativeLocalAPIWritesPreferred: true,
       performance: {
         tokenCachedInMemory: !!this.token,
         defaultCompactResponse: true,
@@ -156,9 +159,6 @@ var ZcliHelper = {
     return [
       "ping",
       "batch",
-      "apply_tags",
-      "move_to_collection",
-      "create_note",
       "import_identifiers",
       "import_pdfs",
       "import_urls",

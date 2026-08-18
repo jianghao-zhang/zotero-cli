@@ -5,12 +5,10 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use rusqlite::{
-    params, params_from_iter, types::Value as SqlValue, Connection, OpenFlags, OptionalExtension,
-};
+use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension};
 use serde_json::{json, Value};
 
-use crate::{config::Config, zotero::ZoteroDb};
+use crate::{config::Config, paths::open_sqlite_readonly, zotero::ZoteroDb};
 
 const SCHEMA_VERSION: i64 = 3;
 const CHUNK_TARGET_CHARS: usize = 1_400;
@@ -850,28 +848,7 @@ fn configure_connection(conn: &Connection) -> Result<()> {
 }
 
 fn open_readonly(path: &Path) -> Result<Connection> {
-    let uri = sqlite_readonly_uri(path);
-    Connection::open_with_flags(
-        &uri,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    )
-    .or_else(|_| Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY))
-    .map_err(Into::into)
-}
-
-fn sqlite_readonly_uri(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    let mut escaped = String::with_capacity(raw.len());
-    for byte in raw.bytes() {
-        match byte {
-            b' ' => escaped.push_str("%20"),
-            b'#' => escaped.push_str("%23"),
-            b'?' => escaped.push_str("%3F"),
-            b'%' => escaped.push_str("%25"),
-            _ => escaped.push(byte as char),
-        }
-    }
-    format!("file:{escaped}?mode=ro&immutable=1")
+    open_sqlite_readonly(path)
 }
 
 fn ensure_schema(conn: &Connection) -> Result<()> {

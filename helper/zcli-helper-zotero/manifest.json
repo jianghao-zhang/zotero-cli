@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "zcli Helper for Zotero",
-  "version": "0.1.0",
-  "description": "Optional local Zotero runtime bridge for zcli dry-run-first mutations.",
+  "version": "0.2.0",
+  "description": "Optional Zotero translator and filesystem bridge for zcli.",
   "homepage_url": "https://github.com/jianghao-zhang/zotero-cli",
   "author": "zotero-cli contributors",
   "applications": {
