@@ -281,11 +281,77 @@ fn write_commands_preview_without_running_helper() -> anyhow::Result<()> {
     assert_eq!(value["helper_op"], "rename_attachment");
     assert_eq!(value["preview"]["attachment_key"], "ATTACH01");
 
+    let output = fixture
+        .cmd()?
+        .args([
+            "write",
+            "metadata",
+            "ITEM0001",
+            "--set",
+            "shortTitle=Agent Memory Systems",
+            "--clear",
+            "archiveLocation",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["operation"], "update_metadata");
+    assert_eq!(value["transport"], "local_api");
+    assert_eq!(
+        value["params"]["fields"]["shortTitle"],
+        "Agent Memory Systems"
+    );
+    assert_eq!(value["params"]["fields"]["archiveLocation"], "");
+    assert_eq!(value["preview"]["current"]["shortTitle"], "Agent Memory");
+
+    fixture
+        .cmd()?
+        .args([
+            "write",
+            "metadata",
+            "ITEM0001",
+            "--set",
+            "creators=unsafe",
+            "--dry-run",
+        ])
+        .assert()
+        .failure();
+
     fixture
         .cmd()?
         .args(["write", "trash", "ITEM0001"])
         .assert()
         .failure();
+    Ok(())
+}
+
+#[test]
+fn duplicate_finder_prefers_doi_and_avoids_double_counting() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let conn = Connection::open(&fixture.db)?;
+    conn.execute_batch(
+        r#"
+        INSERT INTO items VALUES (5, 1, '2026-04-22 10:00:00', '2026-04-22 10:00:00', 'ITEM0002');
+        INSERT INTO itemDataValues VALUES
+          (9, 'Agent Memory for Research!'),
+          (10, 'https://doi.org/10.1234/EXAMPLE');
+        INSERT INTO itemData VALUES (5, 1, 9), (5, 4, 10);
+        "#,
+    )?;
+    drop(conn);
+
+    let value = fixture.json(["find", "duplicates", "--limit", "10"])?;
+    assert_eq!(value["total_groups"], 1);
+    assert_eq!(value["returned_groups"], 1);
+    assert_eq!(
+        value["groups"][0]["match_reason"],
+        "same_doi:10.1234/example"
+    );
+    assert_eq!(value["groups"][0]["items"].as_array().unwrap().len(), 2);
     Ok(())
 }
 

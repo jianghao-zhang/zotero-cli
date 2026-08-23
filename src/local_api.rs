@@ -77,7 +77,8 @@ pub fn doctor(config: &Config) -> Result<Value> {
                 "key_path": key_path,
                 "key_present": stored.is_some(),
                 "key_persistent": stored.as_ref().map(|record| record.remember),
-                "implemented_operations": ["apply_tags", "move_to_collection", "create_note"],
+                "implemented_operations": ["apply_tags", "move_to_collection", "create_note", "update_metadata"],
+                "read_operations": ["cite_items", "export_items"],
                 "zotero_10_capabilities": [
                     "items", "collections", "saved_searches", "tag_delete",
                     "file_upload", "fulltext_write"
@@ -93,7 +94,8 @@ pub fn doctor(config: &Config) -> Result<Value> {
             "key_path": key_path,
             "key_present": stored.is_some(),
             "error": error.to_string(),
-            "implemented_operations": ["apply_tags", "move_to_collection", "create_note"],
+            "implemented_operations": ["apply_tags", "move_to_collection", "create_note", "update_metadata"],
+            "read_operations": ["cite_items", "export_items"],
             "zotero_10_capabilities": [
                 "items", "collections", "saved_searches", "tag_delete",
                 "file_upload", "fulltext_write"
@@ -180,6 +182,7 @@ pub fn call(config: &Config, op: &str, params: Value) -> Result<Value> {
         "apply_tags" => apply_tags(config, &context, &params),
         "move_to_collection" => move_to_collection(config, &context, &params),
         "create_note" => create_note(config, &context, &params),
+        "update_metadata" => update_metadata(config, &context, &params),
         _ => Err(anyhow!("unsupported Zotero Local API operation: {op}")),
     };
     // Zotero consumes one-time keys as soon as a write authenticates, including
@@ -188,6 +191,130 @@ pub fn call(config: &Config, op: &str, params: Value) -> Result<Value> {
         let _ = fs::remove_file(&context.key_path);
     }
     result
+}
+
+pub fn cite_items(
+    config: &Config,
+    keys: &[String],
+    mode: &str,
+    style: Option<&str>,
+    locale: &str,
+    output_format: &str,
+) -> Result<Value> {
+    validate_item_keys(keys)?;
+    if mode != "bibliography" && mode != "citation" {
+        return Err(anyhow!("citation mode must be bibliography or citation"));
+    }
+    if output_format != "text" && output_format != "html" {
+        return Err(anyhow!("citation output must be text or html"));
+    }
+    let mut query = vec![("itemKey", keys.join(","))];
+    if mode == "bibliography" {
+        query.push(("format", "bib".to_string()));
+    } else {
+        query.push(("format", "json".to_string()));
+        query.push(("include", "citation".to_string()));
+        query.push(("limit", keys.len().max(1).to_string()));
+    }
+    if let Some(style) = style.map(str::trim).filter(|style| !style.is_empty()) {
+        query.push(("style", style.to_string()));
+    }
+    if !locale.trim().is_empty() {
+        query.push(("locale", locale.trim().to_string()));
+    }
+    let resource = format!("users/0/items?{}", encode_query(&query));
+    let response = get(config, &resource, Duration::from_secs(10))?;
+    ensure_success(&response, "format Zotero citation")?;
+
+    if mode == "bibliography" {
+        let output = if output_format == "html" {
+            response.body.clone()
+        } else {
+            html_to_text(&response.body)
+        };
+        return Ok(json!({
+            "ok": true,
+            "mode": mode,
+            "source": "zotero_local_api_csl",
+            "item_keys": keys,
+            "style": style,
+            "locale": locale,
+            "format": output_format,
+            "output": output,
+        }));
+    }
+
+    let records: Value = serde_json::from_str(&response.body)
+        .context("Zotero Local API citation response was invalid JSON")?;
+    let citations = records
+        .as_array()
+        .ok_or_else(|| anyhow!("Zotero Local API citation response was not an array"))?
+        .iter()
+        .map(|record| {
+            let html = record
+                .get("citation")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            json!({
+                "key": record.get("key").and_then(Value::as_str),
+                "output": if output_format == "html" { html.to_string() } else { html_to_text(html) },
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "ok": true,
+        "mode": mode,
+        "source": "zotero_local_api_csl",
+        "item_keys": keys,
+        "style": style,
+        "locale": locale,
+        "format": output_format,
+        "citations": citations,
+    }))
+}
+
+pub fn export_items(config: &Config, keys: &[String], format: &str) -> Result<Value> {
+    validate_item_keys(keys)?;
+    const FORMATS: &[&str] = &[
+        "bibtex",
+        "biblatex",
+        "bookmarks",
+        "coins",
+        "csljson",
+        "csv",
+        "mods",
+        "refer",
+        "rdf_bibliontology",
+        "rdf_dc",
+        "rdf_zotero",
+        "ris",
+        "tei",
+        "wikipedia",
+    ];
+    let format = format.trim().to_lowercase();
+    if !FORMATS.contains(&format.as_str()) {
+        return Err(anyhow!(
+            "unsupported Zotero export format: {format}; supported: {}",
+            FORMATS.join(", ")
+        ));
+    }
+    let resource = format!(
+        "users/0/items?{}",
+        encode_query(&[
+            ("itemKey", keys.join(",")),
+            ("format", format.clone()),
+            ("limit", keys.len().max(1).to_string()),
+        ])
+    );
+    let response = get(config, &resource, Duration::from_secs(10))?;
+    ensure_success(&response, "export Zotero items")?;
+    Ok(json!({
+        "ok": true,
+        "source": "zotero_local_api_export",
+        "item_keys": keys,
+        "format": format,
+        "output": response.body,
+    }))
 }
 
 fn apply_tags(config: &Config, context: &WriteContext, params: &Value) -> Result<Value> {
@@ -361,6 +488,49 @@ fn create_note(config: &Config, context: &WriteContext, params: &Value) -> Resul
         "count": 1,
         "item_key": key,
         "parent_key": parent_key,
+    }))
+}
+
+fn update_metadata(config: &Config, context: &WriteContext, params: &Value) -> Result<Value> {
+    let key = required_string(params, "itemKey")?;
+    validate_object_key(&key)?;
+    let fields = params
+        .get("fields")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("fields must be a JSON object"))?;
+    if fields.is_empty() {
+        return Err(anyhow!("fields must contain at least one metadata update"));
+    }
+    validate_metadata_patch(fields)?;
+
+    let before = get_item(config, &key)?;
+    let mut patch = serde_json::Map::new();
+    patch.insert("version".to_string(), json!(object_version(&before)?));
+    for (field, value) in fields {
+        patch.insert(field.clone(), value.clone());
+    }
+    patch_item(config, context, &key, Value::Object(patch))?;
+
+    let after = get_item(config, &key)?;
+    let data = after
+        .get("data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("Zotero Local API verification response contained no data"))?;
+    let verified = fields
+        .iter()
+        .all(|(field, expected)| data.get(field) == Some(expected));
+    if !verified {
+        return Err(anyhow!(
+            "Zotero Local API metadata write could not be verified for {key}"
+        ));
+    }
+    Ok(json!({
+        "ok": true,
+        "op": "update_metadata",
+        "transport": "local_api",
+        "item_key": key,
+        "fields": fields,
+        "verified": true,
     }))
 }
 
@@ -615,6 +785,94 @@ fn validate_object_key(key: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_item_keys(keys: &[String]) -> Result<()> {
+    if keys.is_empty() {
+        return Err(anyhow!("pass at least one Zotero item key"));
+    }
+    for key in keys {
+        validate_object_key(key)?;
+    }
+    Ok(())
+}
+
+pub fn validate_metadata_patch(fields: &serde_json::Map<String, Value>) -> Result<()> {
+    const RESERVED: &[&str] = &[
+        "key",
+        "version",
+        "itemType",
+        "creators",
+        "tags",
+        "collections",
+        "relations",
+        "parentItem",
+        "dateAdded",
+        "dateModified",
+    ];
+    for (field, value) in fields {
+        if field.trim().is_empty() {
+            return Err(anyhow!("metadata field names cannot be empty"));
+        }
+        if RESERVED.contains(&field.as_str()) {
+            return Err(anyhow!(
+                "metadata field {field} is structural and is not supported by `zcli write metadata`"
+            ));
+        }
+        if !value.is_string() {
+            return Err(anyhow!(
+                "metadata field {field} must be a string; structured fields use dedicated commands"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn encode_query(pairs: &[(&str, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(key, value)| format!("{}={}", percent_encode(key), percent_encode(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut output = String::new();
+    for byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.' | b'~' | b',') {
+            output.push(*byte as char);
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    output
+}
+
+fn html_to_text(value: &str) -> String {
+    let mut text = String::new();
+    let mut in_tag = false;
+    for ch in value.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                if !text.ends_with(char::is_whitespace) {
+                    text.push(' ');
+                }
+            }
+            _ if !in_tag => text.push(ch),
+            _ => {}
+        }
+    }
+    let decoded = text
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn merge_tags(
     existing: &[Value],
     add: &[String],
@@ -858,6 +1116,113 @@ mod tests {
             body["tags"],
             json!([{"tag": "keep", "type": 1}, {"tag": "new", "type": 0}])
         );
+    }
+
+    #[test]
+    fn citation_and_export_reads_use_zotero_formats() {
+        let responses = vec![
+            (
+                200,
+                vec![],
+                "<div class=\"csl-bib-body\"><div>Example &amp; Test</div></div>".to_string(),
+            ),
+            (
+                200,
+                vec![],
+                "@article{example, title={Exact Export}}".to_string(),
+            ),
+        ];
+        let (endpoint, server) = spawn_server(responses);
+        let temp = tempfile::tempdir().unwrap();
+        let config = test_config(endpoint, temp.path().join("unused-key.json"));
+
+        let citation = cite_items(
+            &config,
+            &["ITEM0001".to_string()],
+            "bibliography",
+            Some("apa"),
+            "en-US",
+            "text",
+        )
+        .unwrap();
+        assert_eq!(citation["output"], "Example & Test");
+        assert_eq!(citation["source"], "zotero_local_api_csl");
+
+        let export = export_items(&config, &["ITEM0001".to_string()], "bibtex").unwrap();
+        assert_eq!(export["format"], "bibtex");
+        assert!(export["output"].as_str().unwrap().contains("Exact Export"));
+
+        let requests = server.join().unwrap();
+        let cite_request = requests[0].to_ascii_lowercase();
+        assert!(cite_request.contains("itemkey=item0001"));
+        assert!(cite_request.contains("format=bib"));
+        assert!(cite_request.contains("style=apa"));
+        let export_request = requests[1].to_ascii_lowercase();
+        assert!(export_request.contains("format=bibtex"));
+    }
+
+    #[test]
+    fn metadata_write_patches_only_requested_fields_and_verifies() {
+        let responses = vec![
+            (
+                200,
+                vec![("Zotero-Server-ID", "server-3")],
+                "{}".to_string(),
+            ),
+            (
+                200,
+                vec![],
+                json!({
+                    "key": "ITEM0001",
+                    "version": 21,
+                    "data": {"title": "Old", "shortTitle": "Before"}
+                })
+                .to_string(),
+            ),
+            (204, vec![], String::new()),
+            (
+                200,
+                vec![],
+                json!({
+                    "key": "ITEM0001",
+                    "version": 22,
+                    "data": {"title": "New", "shortTitle": ""}
+                })
+                .to_string(),
+            ),
+        ];
+        let (endpoint, server) = spawn_server(responses);
+        let temp = tempfile::tempdir().unwrap();
+        let key_path = temp.path().join("local-api-key.json");
+        save_key_record(
+            &key_path,
+            &LocalApiKeyRecord {
+                key: "test-key".to_string(),
+                server_id: "server-3".to_string(),
+                remember: true,
+            },
+        )
+        .unwrap();
+        let config = test_config(endpoint, key_path);
+
+        let result = call(
+            &config,
+            "update_metadata",
+            json!({
+                "itemKey": "ITEM0001",
+                "fields": {"title": "New", "shortTitle": ""}
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["verified"], true);
+
+        let requests = server.join().unwrap();
+        let patch = &requests[2];
+        let body: Value = serde_json::from_str(patch.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+        assert_eq!(body["version"], 21);
+        assert_eq!(body["title"], "New");
+        assert_eq!(body["shortTitle"], "");
+        assert!(body.get("creators").is_none());
     }
 
     #[test]

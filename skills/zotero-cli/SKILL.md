@@ -12,7 +12,7 @@ Use `zcli` as the direct capability layer for Zotero-backed research work. Do no
 - Prefer `--format json` for agent work.
 - Core reads are local and safe. Imports, writes, and queue/tag handoffs are dry-run-first.
 - Use `--execute` only when the user explicitly asked to perform the write/import in the current turn.
-- Zotero can be closed for local SQLite reads. Local API and helper writes require Zotero to be running. Never silently switch a local operation to the cloud; validate an explicitly requested remote path with `zcli web-api doctor --format json`.
+- Zotero can be closed for local SQLite reads. Local API citation/export reads and all Local API/helper writes require Zotero to be running. Never silently switch a local operation to the cloud; validate an explicitly requested remote path with `zcli web-api doctor --format json`.
 - Never call Zotero's Local API or helper endpoint directly. For tag, collection, and note writes, check `zcli local-api doctor --format json`. For translator, PDF, file, rename, or trash operations, check `zcli helper doctor --format json`. Then use the normal `zcli write ... --execute` or `zcli import ... --execute` command.
 - If a command returns a Zotero item key after a write/import, verify important metadata with `zcli item get ITEMKEY --format json`.
 
@@ -38,6 +38,7 @@ Paper identity:
 ```bash
 zcli resolve "title / citation key / DOI / arXiv / URL / filename" --format json
 zcli find paper "agent memory" --format json
+zcli find duplicates --limit 20 --format json
 ```
 
 One-paper reading surface:
@@ -49,6 +50,8 @@ zcli context ITEMKEY --budget 40k --format json
 zcli item markdown ITEMKEY --format text
 zcli item annotations ITEMKEY --format json
 zcli item notes ITEMKEY --format json
+zcli item cite ITEMKEY --style apa --format json
+zcli item export ITEMKEY --translator bibtex --format json
 ```
 
 Local search:
@@ -135,6 +138,7 @@ zcli write tags ITEMKEY --add review --dry-run --format json
 zcli write note ITEMKEY --content "reading note" --dry-run --format json
 zcli write attach ITEMKEY ./paper.pdf --mode link --dry-run --format json
 zcli write collection ITEMKEY --collection COLLECTIONKEY --action add --dry-run --format json
+zcli write metadata ITEMKEY --set shortTitle="Short title" --dry-run --format json
 ```
 
 For inbox candidates, read the cached alphaXiv overview/markdown first when present, then follow `zotero_plan.dry_run_commands[0]` only for papers the user explicitly selected. Do not import directly from alphaXiv/Hugging Face/X without going through the returned zcli import preview.

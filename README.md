@@ -215,12 +215,12 @@ Output defaults to `auto`:
 | --- | --- | --- |
 | Health and examples | `doctor`, `examples` | Checks config, local Zotero paths, Local API, helper status, and lfz availability without using the network. |
 | Config | `setup`, `config init`, `config status`, `config web-api` | Writes and inspects local config. |
-| Resolve and paper surface | `resolve`, `find paper`, `paper`, `context` | Finds an item from natural inputs such as title, short title, citation key, DOI, arXiv, URL, or file path; returns a compact paper view or builds an agent context pack. |
+| Resolve and paper surface | `resolve`, `find paper`, `find duplicates`, `paper`, `context` | Finds an item from natural inputs, detects likely duplicate records locally, returns a compact paper view, or builds an agent context pack. |
 | Search | `search list`, `search grep`, `search context` | Searches metadata/full text and returns matching context. |
 | Local paper index | `index status`, `index update`, `index search`, `index chunks`, `index chunk`, `index get` | Builds a local SQLite FTS5/BM25 sidecar index for repeated fast paper and passage search. No network or model is required. |
 | Unified inbox | `inbox status`, `inbox fetch`, `inbox triage`, `inbox discussion`, `inbox sources x add/list/remove` | Multi-source paper intake from alphaXiv, Hugging Face Papers, and X/Bird. Returns `paper_candidate/v1` and `paper_discussion/v1` surfaces with time semantics, triage, local context match, workflow commands, and dry-run import plans. |
 | Paper discovery | `alphaxiv feed`, `alphaxiv search`, `alphaxiv discover`, `alphaxiv brief`, `alphaxiv paper`, `alphaxiv markdown`, `alphaxiv pdf`, `alphaxiv zotero-plan` | Uses alphaXiv as a public paper discovery/metrics source, with time-window filtering, research triage, and dry-run Zotero import plans. |
-| Item reads | `item get`, `item extract`, `item annotations`, `item notes`, `item attachments`, `item bibtex`, `item markdown` | Reads Zotero item metadata, extracted text, annotations, notes, attachments, BibTeX, and paper Markdown. |
+| Item reads and citations | `item get`, `item extract`, `item annotations`, `item notes`, `item attachments`, `item cite`, `item export`, `item bibtex`, `item markdown` | Reads local item state; formats exact CSL citations and translator exports through Zotero 10 Local API. `item bibtex` remains the lightweight offline approximation. |
 | Markdown status | `markdown status` | Shows whether Markdown will come from lfz MinerU cache or local fallback. |
 | Library browsing | `collection list`, `collection items`, `tags list`, `tags items`, `recent` | Lists collections, tags, tagged items, collection items, and recently touched papers. |
 | Reading queue | `queue add`, `queue list`, `queue done`, `todo list` | Local read-next queue for user and agent workflows. |
@@ -228,7 +228,7 @@ Output defaults to `auto`:
 | lfz drill-down | `lfz doctor`, `lfz turns`, `lfz turn` | Checks lfz tables and retrieves specific question/final-answer turns. |
 | Mirror | `mirror status`, `mirror rebuild`, `mirror sync`, `mirror watch`, `mirror daemon-install` | Generates and maintains a filesystem mirror of the Zotero library. |
 | Paper import | `import arxiv`, `import ids`, `import pdf`, `import url` | Dry-run-first high-level paper import through Zotero native translators, PDF import, and PDF metadata recognition. |
-| Local writes | `write tags`, `write collection`, `write note`, `write attach`, `write rename-attachment`, `write import-files`, `write trash` | Dry-run-first plans; standard writes use Local API, translator/filesystem writes use helper. |
+| Local writes | `write tags`, `write collection`, `write note`, `write metadata`, `write attach`, `write rename-attachment`, `write import-files`, `write trash` | Dry-run-first plans; standard writes use Local API, translator/filesystem writes use helper. |
 | UI handoff | `open`, `reveal` | Dry-run-first commands for opening or revealing Zotero items/files. |
 | Agent export | `export pack` | Builds a paper pack for [Codex](https://github.com/openai/codex), [Claude Code](https://code.claude.com/docs), [Hermes Agent](https://github.com/nousresearch/hermes-agent), or [OpenClaw](https://github.com/openclaw/openclaw) style workflows. |
 | Agent skill | `skill doctor`, `skill install` | Installs the optional `zotero-cli` skill into supported agent skill roots. |
@@ -354,6 +354,21 @@ zcli item annotations ITEMKEY
 zcli item notes ITEMKEY
 zcli item attachments ITEMKEY
 zcli item bibtex ITEMKEY
+zcli item cite ITEMKEY --style apa
+zcli item cite ITEMKEY --mode citation --style ieee
+zcli item export ITEMKEY --translator bibtex
+zcli find duplicates --limit 20
+```
+
+`item cite` and `item export` use Zotero's own CSL/export engine, so Zotero must
+be running. They are the exact path for publication-ready references and data
+exports. `item bibtex` stays offline-capable but intentionally exposes only the
+small metadata subset available from the local SQLite reader.
+
+Preview a scalar metadata update before executing it:
+
+```bash
+zcli write metadata ITEMKEY --set shortTitle="Short title" --clear archiveLocation --dry-run
 ```
 
 Open local UI/file targets safely:

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -99,6 +99,18 @@ pub struct SearchHit {
     pub attachment_key: Option<String>,
     pub source: String,
     pub snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateGroup {
+    pub match_reason: String,
+    pub items: Vec<ItemSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateGroups {
+    pub total_groups: usize,
+    pub groups: Vec<DuplicateGroup>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +235,68 @@ impl ZoteroDb {
         }
         items.truncate(limit);
         Ok(items)
+    }
+
+    pub fn duplicate_groups(&self, limit: usize) -> Result<DuplicateGroups> {
+        let mut by_doi = HashMap::<String, Vec<ItemSummary>>::new();
+        let mut by_title = HashMap::<String, Vec<ItemSummary>>::new();
+        for item in self.base_items(usize::MAX)? {
+            if let Some(doi) = item.doi.as_deref().and_then(normalize_doi_key) {
+                by_doi.entry(doi).or_default().push(item.clone());
+            }
+            if let Some(title) = item.title.as_deref().and_then(normalize_title_key) {
+                by_title.entry(title).or_default().push(item);
+            }
+        }
+
+        let mut doi_groups = by_doi
+            .into_iter()
+            .filter(|(_, items)| items.len() > 1)
+            .collect::<Vec<_>>();
+        doi_groups.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut title_groups = by_title
+            .into_iter()
+            .filter(|(_, items)| items.len() > 1)
+            .collect::<Vec<_>>();
+        title_groups.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut groups = Vec::new();
+        let mut claimed = HashSet::<i64>::new();
+        for (doi, items) in doi_groups {
+            let unclaimed = items
+                .into_iter()
+                .filter(|item| !claimed.contains(&item.id))
+                .collect::<Vec<_>>();
+            if unclaimed.len() < 2 {
+                continue;
+            }
+            claimed.extend(unclaimed.iter().map(|item| item.id));
+            groups.push(DuplicateGroup {
+                match_reason: format!("same_doi:{doi}"),
+                items: unclaimed,
+            });
+        }
+        for (_, items) in title_groups {
+            let unclaimed = items
+                .into_iter()
+                .filter(|item| !claimed.contains(&item.id))
+                .collect::<Vec<_>>();
+            if unclaimed.len() < 2 {
+                continue;
+            }
+            claimed.extend(unclaimed.iter().map(|item| item.id));
+            groups.push(DuplicateGroup {
+                match_reason: "same_normalized_title".to_string(),
+                items: unclaimed,
+            });
+        }
+
+        let total_groups = groups.len();
+        groups.truncate(limit);
+        Ok(DuplicateGroups {
+            total_groups,
+            groups,
+        })
     }
 
     pub fn resolve_items(&self, query: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
@@ -1666,6 +1740,26 @@ pub fn extract_extra_citation_key(value: Option<&str>) -> Option<String> {
         }
     }
     None
+}
+
+fn normalize_doi_key(value: &str) -> Option<String> {
+    let normalized = value
+        .trim()
+        .trim_start_matches("https://doi.org/")
+        .trim_start_matches("http://doi.org/")
+        .trim_start_matches("doi:")
+        .trim()
+        .to_lowercase();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn normalize_title_key(value: &str) -> Option<String> {
+    let normalized = value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|ch| ch.is_alphanumeric())
+        .collect::<String>();
+    (normalized.chars().count() > 10).then_some(normalized)
 }
 
 fn render_fallback_markdown(detail: &ItemDetail, extracted: &ExtractedText) -> String {

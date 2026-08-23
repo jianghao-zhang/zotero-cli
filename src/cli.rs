@@ -180,6 +180,11 @@ pub enum FindCommands {
         #[arg(long, default_value_t = 10)]
         limit: usize,
     },
+    #[command(about = "Find likely duplicate Zotero items by DOI or normalized title")]
+    Duplicates {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -372,6 +377,48 @@ pub enum ItemCommands {
     Bibtex {
         key: String,
     },
+    #[command(about = "Format exact citations with Zotero's CSL engine")]
+    Cite(ItemCiteArgs),
+    #[command(about = "Export exact item records with Zotero translators")]
+    Export(ItemExportArgs),
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum CitationMode {
+    Bibliography,
+    Citation,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum CitationOutputFormat {
+    Text,
+    Html,
+}
+
+#[derive(Debug, Args)]
+pub struct ItemCiteArgs {
+    #[arg(required = true, help = "One or more Zotero item keys")]
+    pub keys: Vec<String>,
+    #[arg(long, value_enum, default_value = "bibliography")]
+    pub mode: CitationMode,
+    #[arg(long, help = "CSL style name or URL, for example apa or ieee")]
+    pub style: Option<String>,
+    #[arg(long, default_value = "en-US")]
+    pub locale: String,
+    #[arg(long, value_enum, default_value = "text")]
+    pub output: CitationOutputFormat,
+}
+
+#[derive(Debug, Args)]
+pub struct ItemExportArgs {
+    #[arg(required = true, help = "One or more Zotero item keys")]
+    pub keys: Vec<String>,
+    #[arg(
+        long,
+        default_value = "bibtex",
+        help = "Zotero export format, e.g. bibtex, biblatex, ris, csljson, csv"
+    )]
+    pub translator: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -408,6 +455,7 @@ pub enum WriteCommands {
     RenameAttachment(WriteRenameAttachmentArgs),
     ImportFiles(WriteImportFilesArgs),
     Trash(WriteTrashArgs),
+    Metadata(WriteMetadataArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -567,6 +615,27 @@ pub struct WriteImportFilesArgs {
 #[derive(Debug, Args)]
 pub struct WriteTrashArgs {
     pub key: String,
+    #[arg(long)]
+    pub dry_run: bool,
+    #[arg(long)]
+    pub execute: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct WriteMetadataArgs {
+    pub key: String,
+    #[arg(
+        long = "set",
+        value_name = "FIELD=VALUE",
+        help = "Set a scalar Zotero metadata field; repeat for multiple fields"
+    )]
+    pub set_fields: Vec<String>,
+    #[arg(
+        long = "clear",
+        value_name = "FIELD",
+        help = "Clear a scalar Zotero metadata field; repeat for multiple fields"
+    )]
+    pub clear_fields: Vec<String>,
     #[arg(long)]
     pub dry_run: bool,
     #[arg(long)]
@@ -1194,17 +1263,21 @@ fn examples() -> Result<Value> {
         "examples": [
             {"name": "find a paper", "command": "zcli resolve \"paper title, short title, citation key, DOI, arXiv, URL, or file path\""},
             {"name": "hybrid paper finder", "command": "zcli find paper \"agentic rl survey\" --format json"},
+            {"name": "find likely duplicates", "command": "zcli find duplicates --limit 20 --format json"},
             {"name": "build local paper index", "command": "zcli index update --format json"},
             {"name": "search local paper index", "command": "zcli index search \"agent memory\" --format json"},
             {"name": "search paper passages", "command": "zcli index chunks \"agent memory\" --item ITEMKEY --format json"},
             {"name": "paper work surface", "command": "zcli paper ITEMKEY --format pretty"},
             {"name": "agent context pack", "command": "zcli context ITEMKEY --budget 40k --format json"},
             {"name": "raw markdown", "command": "zcli item markdown ITEMKEY --format text"},
+            {"name": "exact APA bibliography", "command": "zcli item cite ITEMKEY --style apa --format json"},
+            {"name": "exact BibTeX export", "command": "zcli item export ITEMKEY --translator bibtex --format json"},
             {"name": "markdown source status", "command": "zcli markdown status ITEMKEY --format pretty"},
             {"name": "today recap", "command": "zcli recap today --format pretty"},
             {"name": "llm-for-zotero turns for one paper", "command": "zcli lfz turns --item ITEMKEY --format json"},
             {"name": "preview arXiv import", "command": "zcli import arxiv 2604.06240 --dry-run"},
             {"name": "preview PDF import and metadata recognition", "command": "zcli import pdf ./paper.pdf --dry-run"},
+            {"name": "preview metadata update", "command": "zcli write metadata ITEMKEY --set shortTitle=Short --dry-run"},
             {"name": "mirror with paper.md", "command": "zcli --mirror-root ~/ZoteroMirror mirror sync --write-markdown"},
             {"name": "agent skill check", "command": "zcli skill doctor --format pretty"},
             {"name": "Zotero helper plugin check", "command": "zcli helper doctor --format pretty"},
@@ -1235,6 +1308,17 @@ fn dispatch_find(context: &Context, command: &FindCommands) -> Result<Value> {
             "note": "Local zero-network weighted search over Zotero metadata; embedding semantic search can be layered on later.",
             "hits": db.find_papers(query, *limit)?,
         })),
+        FindCommands::Duplicates { limit } => {
+            let result = db.duplicate_groups(*limit)?;
+            Ok(json!({
+                "ok": true,
+                "mode": "local_duplicate_detection",
+                "matching": ["exact_normalized_doi", "exact_normalized_title"],
+                "total_groups": result.total_groups,
+                "returned_groups": result.groups.len(),
+                "groups": result.groups,
+            }))
+        }
     }
 }
 
@@ -1526,7 +1610,39 @@ fn dispatch_item(context: &Context, command: &ItemCommands) -> Result<Value> {
                 "ok": true,
                 "item": item.summary,
                 "bibtex": db.bibtex(key)?,
+                "source": "local_sqlite_approximation",
+                "exact_command": format!(
+                    "zcli item export {} --translator bibtex --format json",
+                    key
+                ),
             }))
+        }
+        ItemCommands::Cite(args) => {
+            for key in &args.keys {
+                let item = db.get_item(key)?;
+                db.log_read(&context.config, "item cite", &item.summary);
+            }
+            local_api::cite_items(
+                &context.config,
+                &args.keys,
+                match args.mode {
+                    CitationMode::Bibliography => "bibliography",
+                    CitationMode::Citation => "citation",
+                },
+                args.style.as_deref(),
+                &args.locale,
+                match args.output {
+                    CitationOutputFormat::Text => "text",
+                    CitationOutputFormat::Html => "html",
+                },
+            )
+        }
+        ItemCommands::Export(args) => {
+            for key in &args.keys {
+                let item = db.get_item(key)?;
+                db.log_read(&context.config, "item export", &item.summary);
+            }
+            local_api::export_items(&context.config, &args.keys, &args.translator)
         }
     }
 }
@@ -1775,7 +1891,73 @@ fn dispatch_write(context: &Context, command: &WriteCommands) -> Result<Value> {
                 ),
             )
         }
+        WriteCommands::Metadata(args) => {
+            mutation::require_intent(args.dry_run, args.execute)?;
+            let fields = parse_metadata_patch(&args.set_fields, &args.clear_fields)?;
+            local_api::validate_metadata_patch(&fields)?;
+            let db = ZoteroDb::open(&context.config)?;
+            let item = db.get_item(&args.key)?;
+            let current = fields
+                .keys()
+                .map(|field| {
+                    (
+                        field.clone(),
+                        Value::String(item.fields.get(field).cloned().unwrap_or_default()),
+                    )
+                })
+                .collect::<serde_json::Map<String, Value>>();
+            mutation::preview_or_execute(
+                &context.config,
+                args.dry_run,
+                MutationPlan::local_api(
+                    "update_metadata",
+                    json!({
+                        "itemKey": args.key,
+                        "fields": fields.clone(),
+                    }),
+                    json!({
+                        "target": item.summary,
+                        "current": current,
+                        "changes": fields,
+                        "execute_command": format!(
+                            "zcli write metadata {} <same --set/--clear arguments> --execute",
+                            args.key
+                        ),
+                    }),
+                ),
+            )
+        }
     }
+}
+
+fn parse_metadata_patch(
+    set_fields: &[String],
+    clear_fields: &[String],
+) -> Result<serde_json::Map<String, Value>> {
+    let mut fields = serde_json::Map::new();
+    for assignment in set_fields {
+        let (field, value) = assignment
+            .split_once('=')
+            .ok_or_else(|| anyhow!("invalid --set value {assignment:?}; expected FIELD=VALUE"))?;
+        let field = field.trim();
+        if field.is_empty() {
+            return Err(anyhow!("metadata field names cannot be empty"));
+        }
+        fields.insert(field.to_string(), Value::String(value.to_string()));
+    }
+    for field in clear_fields {
+        let field = field.trim();
+        if field.is_empty() {
+            return Err(anyhow!("metadata field names cannot be empty"));
+        }
+        fields.insert(field.to_string(), Value::String(String::new()));
+    }
+    if fields.is_empty() {
+        return Err(anyhow!(
+            "pass at least one --set FIELD=VALUE or --clear FIELD"
+        ));
+    }
+    Ok(fields)
 }
 
 fn dispatch_import(context: &Context, command: &ImportCommands) -> Result<Value> {
