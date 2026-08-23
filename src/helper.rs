@@ -92,12 +92,16 @@ pub fn doctor(config: &Config) -> Result<Value> {
             Some(err.to_string()),
             Some(value),
         ),
-        (Some(Err(err)), Err(probe_err)) => (
-            "unavailable",
-            None,
-            Some(format!("{}; {}", err, probe_err)),
-            None,
-        ),
+        (Some(Err(err)), Err(probe_err)) => {
+            let authenticated = err.to_string();
+            let unauthenticated = probe_err.to_string();
+            let message = if authenticated == unauthenticated {
+                authenticated
+            } else {
+                format!("{authenticated}; {unauthenticated}")
+            };
+            ("unavailable", None, Some(message), None)
+        }
         (None, Ok(value)) => ("token_missing", None, None, Some(value)),
         (None, Err(err)) => (
             "not_installed_or_server_unreachable",
@@ -122,9 +126,6 @@ pub fn doctor(config: &Config) -> Result<Value> {
         "capabilities": [
             "ping",
             "batch",
-            "apply_tags",
-            "move_to_collection",
-            "create_note",
             "import_identifiers",
             "import_pdfs",
             "import_urls",
@@ -140,6 +141,8 @@ pub fn doctor(config: &Config) -> Result<Value> {
             "dry_run_first": true,
             "sqlite_writes": false
         },
+        "role": "translator-and-filesystem-bridge",
+        "native_local_api_writes_preferred": true,
         "performance": {
             "mode": "fast",
             "token_cached_in_plugin": true,

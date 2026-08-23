@@ -1,4 +1,4 @@
-use std::{fs, process::Command, time::Duration};
+use std::{collections::HashMap, fs, path::PathBuf, process::Command, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDate, Utc};
@@ -50,6 +50,11 @@ pub struct FetchOptions<'a> {
     pub timeout: u64,
     pub context: bool,
     pub code_overview: bool,
+    pub show_seen: bool,
+    pub show_existing: bool,
+    pub seen_days: i64,
+    pub cache_overview: bool,
+    pub overview_ttl_days: i64,
     pub dry_run: bool,
     pub execute: bool,
 }
@@ -167,32 +172,51 @@ pub fn remove_x_handle(config: &mut Config, handle: &str) -> Result<Value> {
 }
 
 pub fn fetch(options: FetchOptions<'_>) -> Result<Value> {
-    if options.execute {
-        return Err(anyhow!(
-            "inbox fetch is a read-only candidate preview; import or write actions must use the returned dry-run commands explicitly"
-        ));
-    }
     let query = options.query.unwrap_or("").trim();
     let source = match options.source {
         InboxSource::Alphaxiv => {
-            if query.is_empty() {
-                return Err(anyhow!("inbox fetch --source alphaxiv requires a query"));
+            if matches!(options.fallback_sort, FeedSort::Recommended)
+                && !(options.config.risk.high_risk_auth_enabled
+                    && options.config.risk.alphaxiv_auth_enabled)
+            {
+                return Err(anyhow!(
+                    "alphaXiv Recommended uses the local Clerk session; enable high-risk alphaXiv auth in `zcli setup` before fetching it through inbox"
+                ));
             }
-            alphaxiv::discover_with_options(alphaxiv::DiscoveryOptions {
-                query,
-                limit: options.limit,
-                fallback_sort: options.fallback_sort,
-                fallback_interval: options.fallback_interval,
-                topics: options.topics,
-                min_likes: options.min_likes,
-                min_github_stars: options.min_github_stars,
-                min_visits: options.min_visits,
-                since: options.since,
-                days: options.days,
-                date_field: options.date_field,
-                timeout: options.timeout,
-                triage: true,
-            })?
+            if query.is_empty() {
+                alphaxiv::feed(&alphaxiv::FeedArgs {
+                    sort: options.fallback_sort,
+                    interval: options.fallback_interval.to_string(),
+                    limit: options.limit,
+                    page_size: options.limit.clamp(20, 100),
+                    topics: options.topics.to_vec(),
+                    min_likes: options.min_likes,
+                    min_github_stars: options.min_github_stars,
+                    min_visits: options.min_visits,
+                    rank_metrics: false,
+                    with_zotero_plan: true,
+                    since: options.since.map(ToOwned::to_owned),
+                    days: options.days,
+                    date_field: options.date_field,
+                    timeout: options.timeout,
+                })?
+            } else {
+                alphaxiv::discover_with_options(alphaxiv::DiscoveryOptions {
+                    query,
+                    limit: options.limit,
+                    fallback_sort: options.fallback_sort,
+                    fallback_interval: options.fallback_interval,
+                    topics: options.topics,
+                    min_likes: options.min_likes,
+                    min_github_stars: options.min_github_stars,
+                    min_visits: options.min_visits,
+                    since: options.since,
+                    days: options.days,
+                    date_field: options.date_field,
+                    timeout: options.timeout,
+                    triage: true,
+                })?
+            }
         }
         InboxSource::Huggingface => fetch_huggingface(&options, query)?,
         InboxSource::X => fetch_x(&options, query)?,
@@ -212,18 +236,39 @@ pub fn fetch(options: FetchOptions<'_>) -> Result<Value> {
         .enumerate()
         .map(|(index, paper)| paper_candidate(index + 1, options.source, query, paper))
         .collect::<Vec<_>>();
+    ensure_candidate_triage(&mut candidates, options.source, query);
     apply_context_profile(&mut candidates, &local_context);
     if options.code_overview {
         attach_code_overviews(&mut candidates, options.timeout);
     }
+    let duplicate_report = apply_inbox_filters(&mut candidates, &options).unwrap_or_else(|error| {
+        json!({
+            "ok": false,
+            "message": error.to_string(),
+        })
+    });
+    if options.cache_overview && matches!(options.source, InboxSource::Alphaxiv) {
+        attach_alphaxiv_overview_cache(
+            options.config,
+            &mut candidates,
+            options.timeout,
+            options.overview_ttl_days,
+        );
+    }
     for (index, candidate) in candidates.iter_mut().enumerate() {
         candidate["rank"] = json!(index + 1);
     }
+    let state_update = if options.execute {
+        mark_candidates_seen(options.config, &candidates)
+    } else {
+        Ok(json!({"executed": false, "reason": "pass --execute to record displayed candidates as seen"}))
+    }
+    .unwrap_or_else(|error| json!({"executed": false, "error": error.to_string()}));
 
     Ok(json!({
         "ok": true,
         "dry_run": options.dry_run,
-        "executed": false,
+        "executed": options.execute,
         "schema": "paper_candidate/v1",
         "source": options.source.as_str(),
         "query": query,
@@ -235,9 +280,11 @@ pub fn fetch(options: FetchOptions<'_>) -> Result<Value> {
         },
         "context_profile": local_context.to_json(),
         "count": candidates.len(),
+        "dedupe": duplicate_report,
+        "state_update": state_update,
         "candidates": candidates,
         "source_errors": source.get("errors").cloned().unwrap_or_else(|| json!([])),
-        "next_step": "Run a returned zotero_plan dry-run command, then execute that import command only after reviewing it.",
+        "next_step": "Read cached alphaXiv overview/markdown first. Run a returned Zotero dry-run command only after selecting papers to import.",
     }))
 }
 
@@ -796,6 +843,379 @@ fn paper_candidate(rank: usize, source: InboxSource, query: &str, paper: &Value)
         "zotero_plan": paper.get("zotero_plan").cloned().unwrap_or(Value::Null),
         "raw_source": paper,
     })
+}
+
+fn ensure_candidate_triage(candidates: &mut [Value], source: InboxSource, query: &str) {
+    for candidate in candidates {
+        if candidate
+            .pointer("/triage/lane")
+            .and_then(Value::as_str)
+            .is_some()
+        {
+            continue;
+        }
+        let score = candidate_signal_score(candidate);
+        let lane = if score >= 500 {
+            "read_now"
+        } else if score > 0 {
+            "skim"
+        } else {
+            "watch"
+        };
+        let mut reasons = Vec::new();
+        if !query.is_empty() {
+            reasons.push(format!("{} source match", source.as_str()));
+        }
+        if let Some(date) = candidate
+            .pointer("/time/first_seen_at")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                candidate
+                    .pointer("/time/published_at")
+                    .and_then(Value::as_str)
+            })
+            .and_then(|value| value.split('T').next())
+        {
+            reasons.push(format!("source date {date}"));
+        }
+        let metrics = candidate
+            .pointer("/signals/metrics")
+            .unwrap_or(&Value::Null);
+        for (label, key) in [
+            ("alphaXiv likes", "public_total_votes"),
+            ("GitHub stars", "github_stars"),
+            ("visits", "visits_7d"),
+            ("HF upvotes", "upvotes"),
+            ("X likes", "likes"),
+        ] {
+            if let Some(value) = metrics
+                .get(key)
+                .and_then(Value::as_i64)
+                .filter(|value| *value > 0)
+            {
+                reasons.push(format!("{value} {label}"));
+            }
+        }
+        candidate["triage"] = json!({
+            "lane": lane,
+            "score": score,
+            "reasons": reasons,
+            "next_commands": candidate
+                .pointer("/workflow/before_import/0/command")
+                .and_then(Value::as_str)
+                .map(|command| vec![command.to_string()])
+                .unwrap_or_default(),
+        });
+    }
+}
+
+fn candidate_signal_score(candidate: &Value) -> i64 {
+    let metrics = candidate
+        .pointer("/signals/metrics")
+        .unwrap_or(&Value::Null);
+    metrics
+        .get("public_total_votes")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        * 100
+        + metrics
+            .get("github_stars")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            * 25
+        + metrics
+            .get("visits_7d")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            * 2
+        + metrics
+            .get("visits_all")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            / 10
+        + metrics.get("upvotes").and_then(Value::as_i64).unwrap_or(0) * 100
+        + metrics.get("likes").and_then(Value::as_i64).unwrap_or(0) * 10
+        + metrics.get("retweets").and_then(Value::as_i64).unwrap_or(0) * 20
+}
+
+fn state_dir(config: &Config) -> Result<PathBuf> {
+    config
+        .state_dir
+        .clone()
+        .map(|path| path.join("inbox"))
+        .ok_or_else(|| anyhow!("zcli state_dir is unavailable; cannot read inbox seen state"))
+}
+
+fn seen_state_path(config: &Config) -> Result<PathBuf> {
+    Ok(state_dir(config)?.join("seen.json"))
+}
+
+fn candidate_key(candidate: &Value) -> String {
+    candidate
+        .get("candidate_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn read_seen_entries(config: &Config) -> Result<HashMap<String, Value>> {
+    let path = seen_state_path(config)?;
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read inbox seen state {}", path.display()))?;
+    let values = serde_json::from_str::<Vec<Value>>(&raw)
+        .with_context(|| format!("failed to parse inbox seen state {}", path.display()))?;
+    Ok(values
+        .into_iter()
+        .filter_map(|entry| {
+            let key = entry
+                .get("candidate_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)?;
+            Some((key, entry))
+        })
+        .collect())
+}
+
+fn seen_at(entry: &Value) -> Option<DateTime<Utc>> {
+    entry
+        .get("last_seen_at")
+        .and_then(Value::as_str)
+        .and_then(parse_datetime)
+}
+
+fn seen_is_recent_without_spike(candidate: &Value, entry: &Value, seen_days: i64) -> bool {
+    if seen_days <= 0 {
+        return false;
+    }
+    let Some(last_seen) = seen_at(entry) else {
+        return false;
+    };
+    if last_seen < Utc::now() - ChronoDuration::days(seen_days) {
+        return false;
+    }
+    let previous_score = entry.get("score").and_then(Value::as_i64).unwrap_or(0);
+    let current_score = candidate_signal_score(candidate);
+    current_score <= previous_score.saturating_mul(2).saturating_add(100)
+}
+
+fn candidate_duplicate_queries(candidate: &Value) -> Vec<(String, i64)> {
+    let mut queries = Vec::new();
+    for path in [
+        "/identifiers/arxiv_id",
+        "/identifiers/alphaxiv_id",
+        "/identifiers/canonical_id",
+    ] {
+        if let Some(value) = candidate.pointer(path).and_then(Value::as_str) {
+            if let Some(id) = arxiv_id_from_text(value) {
+                queries.push((id, 94));
+            }
+        }
+    }
+    if let Some(url) = candidate.pointer("/urls/source").and_then(Value::as_str) {
+        queries.push((url.to_string(), 90));
+    }
+    if let Some(title) = candidate.get("title").and_then(Value::as_str) {
+        if title.chars().count() >= 12 {
+            queries.push((title.to_string(), 70));
+        }
+    }
+    queries.sort_by(|a, b| a.0.cmp(&b.0));
+    queries.dedup_by(|a, b| a.0 == b.0);
+    queries
+}
+
+fn existing_matches_for_candidate(db: &ZoteroDb, candidate: &Value) -> Vec<Value> {
+    let mut seen = std::collections::HashSet::new();
+    let mut matches = Vec::new();
+    for (query, threshold) in candidate_duplicate_queries(candidate) {
+        for item in db.resolve_items(&query, 3).unwrap_or_default() {
+            let score = item.get("score").and_then(Value::as_i64).unwrap_or(0);
+            if score < threshold {
+                continue;
+            }
+            let key = item
+                .pointer("/item/key")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if key.is_empty() || seen.insert(key) {
+                matches.push(item);
+            }
+        }
+    }
+    matches
+}
+
+fn apply_inbox_filters(candidates: &mut Vec<Value>, options: &FetchOptions<'_>) -> Result<Value> {
+    let seen_entries = if options.show_seen {
+        HashMap::new()
+    } else {
+        read_seen_entries(options.config).unwrap_or_default()
+    };
+    let db_result = if options.show_existing {
+        None
+    } else {
+        Some(ZoteroDb::open(options.config))
+    };
+    let mut existing_unavailable = None;
+    let db = match db_result {
+        Some(Ok(db)) => Some(db),
+        Some(Err(error)) => {
+            existing_unavailable = Some(error.to_string());
+            None
+        }
+        None => None,
+    };
+
+    let mut hidden_existing = 0usize;
+    let mut hidden_seen = 0usize;
+    let mut surfaced_spikes = 0usize;
+    let mut examples = Vec::new();
+
+    candidates.retain_mut(|candidate| {
+        if let Some(db) = db.as_ref() {
+            let matches = existing_matches_for_candidate(db, candidate);
+            if !matches.is_empty() {
+                candidate["existing_in_library"] = json!({
+                    "status": "matched",
+                    "matches": matches,
+                });
+                if !options.show_existing {
+                    hidden_existing += 1;
+                    if examples.len() < 5 {
+                        examples.push(json!({
+                            "reason": "existing_in_library",
+                            "candidate_id": candidate.get("candidate_id").cloned().unwrap_or(Value::Null),
+                            "title": candidate.get("title").cloned().unwrap_or(Value::Null),
+                        }));
+                    }
+                    return false;
+                }
+            } else {
+                candidate["existing_in_library"] = json!({"status": "not_found"});
+            }
+        } else {
+            candidate["existing_in_library"] = json!({
+                "status": "unavailable",
+                "reason": existing_unavailable,
+            });
+        }
+
+        let key = candidate_key(candidate);
+        if !options.show_seen {
+            if let Some(entry) = seen_entries.get(&key) {
+                if seen_is_recent_without_spike(candidate, entry, options.seen_days) {
+                    hidden_seen += 1;
+                    if examples.len() < 5 {
+                        examples.push(json!({
+                            "reason": "seen_recently",
+                            "candidate_id": key,
+                            "last_seen_at": entry.get("last_seen_at").cloned().unwrap_or(Value::Null),
+                            "title": candidate.get("title").cloned().unwrap_or(Value::Null),
+                        }));
+                    }
+                    return false;
+                }
+                surfaced_spikes += 1;
+                candidate["seen_state"] = json!({
+                    "status": "resurfaced",
+                    "reason": "metrics_spike_or_seen_window_expired",
+                    "previous_score": entry.get("score").cloned().unwrap_or(Value::Null),
+                    "current_score": candidate_signal_score(candidate),
+                    "last_seen_at": entry.get("last_seen_at").cloned().unwrap_or(Value::Null),
+                });
+            }
+        }
+        true
+    });
+
+    Ok(json!({
+        "show_seen": options.show_seen,
+        "show_existing": options.show_existing,
+        "seen_days": options.seen_days,
+        "hidden_existing": hidden_existing,
+        "hidden_seen_recently": hidden_seen,
+        "surfaced_metric_spikes_or_expired": surfaced_spikes,
+        "existing_check": if existing_unavailable.is_some() { "unavailable" } else if options.show_existing { "disabled_by_flag" } else { "local_zotero_db" },
+        "examples": examples,
+    }))
+}
+
+fn attach_alphaxiv_overview_cache(
+    config: &Config,
+    candidates: &mut [Value],
+    timeout: u64,
+    ttl_days: i64,
+) {
+    for candidate in candidates {
+        let Some(id) = candidate
+            .pointer("/identifiers/alphaxiv_id")
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let value = alphaxiv::cache_overview_markdown(config, id, timeout, ttl_days)
+            .unwrap_or_else(|error| {
+                json!({
+                    "kind": "overview_markdown",
+                    "ok": false,
+                    "error": error.to_string(),
+                })
+            });
+        if let Some(object) = candidate.as_object_mut() {
+            let cache = object
+                .entry("cache".to_string())
+                .or_insert_with(|| json!({}));
+            if let Some(cache_object) = cache.as_object_mut() {
+                cache_object.insert("overview_markdown".to_string(), value);
+            }
+        }
+    }
+}
+
+fn mark_candidates_seen(config: &Config, candidates: &[Value]) -> Result<Value> {
+    let path = seen_state_path(config)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut entries = read_seen_entries(config).unwrap_or_default();
+    let now = Utc::now().to_rfc3339();
+    for candidate in candidates {
+        let key = candidate_key(candidate);
+        if key.is_empty() {
+            continue;
+        }
+        entries.insert(
+            key.clone(),
+            json!({
+                "candidate_id": key,
+                "source": candidate.get("source").cloned().unwrap_or(Value::Null),
+                "title": candidate.get("title").cloned().unwrap_or(Value::Null),
+                "last_seen_at": now,
+                "score": candidate_signal_score(candidate),
+                "identifiers": candidate.get("identifiers").cloned().unwrap_or(Value::Null),
+                "urls": candidate.get("urls").cloned().unwrap_or(Value::Null),
+            }),
+        );
+    }
+    let mut values = entries.into_values().collect::<Vec<_>>();
+    values.sort_by(|a, b| {
+        b.get("last_seen_at")
+            .and_then(Value::as_str)
+            .cmp(&a.get("last_seen_at").and_then(Value::as_str))
+    });
+    values.truncate(2_000);
+    fs::write(&path, serde_json::to_vec_pretty(&values)?)
+        .with_context(|| format!("failed to write inbox seen state {}", path.display()))?;
+    Ok(json!({
+        "executed": true,
+        "kind": "mark_seen",
+        "path": path,
+        "count": candidates.len(),
+    }))
 }
 
 #[derive(Default)]
@@ -1862,6 +2282,59 @@ mod tests {
             candidate["workflow"]["after_import_with_item_key"][2]["label"],
             "create_reading_context"
         );
+    }
+
+    #[test]
+    fn seen_state_hides_recent_candidates_by_default() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.state_dir = Some(temp.path().to_path_buf());
+        let handles = Vec::<String>::new();
+        let topics = Vec::<String>::new();
+        let paper = json!({
+            "alphaxiv_id": "2605.00001",
+            "canonical_id": "2605.00001v1",
+            "title": "Agent Memory Harnesses",
+            "metrics": {"public_total_votes": 3, "visits_7d": 10},
+            "url": "https://www.alphaxiv.org/abs/2605.00001",
+        });
+        let candidate = paper_candidate(1, InboxSource::Alphaxiv, "", &paper);
+        mark_candidates_seen(&config, &[candidate]).unwrap();
+
+        let mut candidates = vec![paper_candidate(1, InboxSource::Alphaxiv, "", &paper)];
+        let options = FetchOptions {
+            config: &config,
+            source: InboxSource::Alphaxiv,
+            query: None,
+            handles: &handles,
+            configured_x_handles: &handles,
+            tweet_limit: 0,
+            limit: 30,
+            fallback_sort: FeedSort::Hot,
+            fallback_interval: "3 Days",
+            topics: &topics,
+            min_likes: None,
+            min_github_stars: None,
+            min_visits: None,
+            since: None,
+            days: None,
+            date_field: DateField::Any,
+            timeout: 1,
+            context: false,
+            code_overview: false,
+            show_seen: false,
+            show_existing: true,
+            seen_days: 30,
+            cache_overview: false,
+            overview_ttl_days: 7,
+            dry_run: true,
+            execute: false,
+        };
+
+        let report = apply_inbox_filters(&mut candidates, &options).unwrap();
+
+        assert!(candidates.is_empty());
+        assert_eq!(report["hidden_seen_recently"], 1);
     }
 
     #[test]

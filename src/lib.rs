@@ -8,12 +8,15 @@ mod import_plan;
 mod inbox;
 mod index;
 mod lfz;
+mod local_api;
 mod mirror;
 mod mutation;
 mod output;
 mod paths;
+mod reading;
 mod setup;
 mod skill;
+mod web_api;
 mod zotero;
 
 use anyhow::Result;

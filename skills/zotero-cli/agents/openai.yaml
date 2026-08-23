@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zotero Reader"
+  short_description: "Open and read local Zotero PDFs with evidence"
+  default_prompt: "Use $zotero-cli to open a real local Zotero PDF beside this Codex App chat and help me read it with passage-level evidence."

@@ -1,19 +1,37 @@
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use crate::{config::Config, helper};
+use crate::{config::Config, helper, local_api};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MutationTransport {
+    LocalApi,
+    Helper,
+}
 
 pub struct MutationPlan {
-    pub helper_op: &'static str,
+    pub op: &'static str,
+    pub transport: MutationTransport,
     pub params: Value,
     pub preview: Value,
     pub empty_execute_reason: Option<&'static str>,
 }
 
 impl MutationPlan {
-    pub fn new(helper_op: &'static str, params: Value, preview: Value) -> Self {
+    pub fn local_api(op: &'static str, params: Value, preview: Value) -> Self {
         Self {
-            helper_op,
+            op,
+            transport: MutationTransport::LocalApi,
+            params,
+            preview,
+            empty_execute_reason: None,
+        }
+    }
+
+    pub fn helper(op: &'static str, params: Value, preview: Value) -> Self {
+        Self {
+            op,
+            transport: MutationTransport::Helper,
             params,
             preview,
             empty_execute_reason: None,
@@ -32,7 +50,7 @@ pub fn require_intent(dry_run: bool, execute: bool) -> Result<()> {
     }
     if !dry_run && !execute {
         return Err(anyhow!(
-            "write commands are dry-run-first; pass --dry-run to preview or --execute to run through the optional Zotero helper"
+            "write commands are dry-run-first; pass --dry-run to preview or --execute"
         ));
     }
     Ok(())
@@ -40,11 +58,15 @@ pub fn require_intent(dry_run: bool, execute: bool) -> Result<()> {
 
 pub fn preview_or_execute(config: &Config, dry_run: bool, plan: MutationPlan) -> Result<Value> {
     if dry_run {
+        let transport = transport_name(plan.transport);
         return Ok(json!({
             "ok": true,
             "dry_run": true,
-            "helper_required_for_execute": true,
-            "helper_op": plan.helper_op,
+            "transport": transport,
+            "operation": plan.op,
+            "local_api_required_for_execute": matches!(plan.transport, MutationTransport::LocalApi),
+            "helper_required_for_execute": matches!(plan.transport, MutationTransport::Helper),
+            "helper_op": matches!(plan.transport, MutationTransport::Helper).then_some(plan.op),
             "params": plan.params,
             "preview": plan.preview,
         }));
@@ -54,7 +76,8 @@ pub fn preview_or_execute(config: &Config, dry_run: bool, plan: MutationPlan) ->
             return Ok(json!({
                 "ok": true,
                 "dry_run": false,
-                "helper_op": plan.helper_op,
+                "transport": transport_name(plan.transport),
+                "operation": plan.op,
                 "executed": false,
                 "reason": reason,
                 "params": plan.params,
@@ -62,14 +85,26 @@ pub fn preview_or_execute(config: &Config, dry_run: bool, plan: MutationPlan) ->
             }));
         }
     }
-    let result = helper::call(config, plan.helper_op, plan.params.clone())?;
+    let result = match plan.transport {
+        MutationTransport::LocalApi => local_api::call(config, plan.op, plan.params.clone())?,
+        MutationTransport::Helper => helper::call(config, plan.op, plan.params.clone())?,
+    };
     Ok(json!({
         "ok": true,
         "dry_run": false,
-        "helper_op": plan.helper_op,
+        "transport": transport_name(plan.transport),
+        "operation": plan.op,
+        "helper_op": matches!(plan.transport, MutationTransport::Helper).then_some(plan.op),
         "params": plan.params,
         "result": result,
     }))
+}
+
+fn transport_name(transport: MutationTransport) -> &'static str {
+    match transport {
+        MutationTransport::LocalApi => "local_api",
+        MutationTransport::Helper => "helper",
+    }
 }
 
 fn payload_is_empty(params: &Value) -> bool {
@@ -92,11 +127,12 @@ mod tests {
         let value = preview_or_execute(
             &config,
             true,
-            MutationPlan::new("op", json!({"x": 1}), json!({"target": "paper"})),
+            MutationPlan::helper("op", json!({"x": 1}), json!({"target": "paper"})),
         )
         .unwrap();
         assert_eq!(value["dry_run"], true);
-        assert_eq!(value["helper_op"], "op");
+        assert_eq!(value["operation"], "op");
+        assert_eq!(value["transport"], "helper");
         assert_eq!(value["preview"]["target"], "paper");
     }
 }

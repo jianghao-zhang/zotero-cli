@@ -1,6 +1,6 @@
 {
   "name": "zotero-cli",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Fast local Zotero CLI for humans and agents",
   "license": "MIT",
   "bin": {

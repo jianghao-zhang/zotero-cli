@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     time::Duration,
@@ -8,11 +8,11 @@ use std::{
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use regex::Regex;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{activity, config::Config, date_range::DateRange};
+use crate::{activity, config::Config, date_range::DateRange, paths::open_sqlite_readonly};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItemSummary {
@@ -102,6 +102,18 @@ pub struct SearchHit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateGroup {
+    pub match_reason: String,
+    pub items: Vec<ItemSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateGroups {
+    pub total_groups: usize,
+    pub groups: Vec<DuplicateGroup>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedText {
     pub item: ItemSummary,
     pub text: String,
@@ -143,13 +155,8 @@ impl ZoteroDb {
             .zotero_db_path
             .as_ref()
             .ok_or_else(|| anyhow!("zotero_db_path is not configured"))?;
-        let uri = sqlite_readonly_uri(db_path);
-        let conn = Connection::open_with_flags(
-            &uri,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-        )
-        .or_else(|_| Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY))
-        .with_context(|| format!("failed to open Zotero database {}", db_path.display()))?;
+        let conn = open_sqlite_readonly(db_path)
+            .with_context(|| format!("failed to open Zotero database {}", db_path.display()))?;
         conn.busy_timeout(Duration::from_secs(5))?;
         Ok(Self {
             conn,
@@ -228,6 +235,68 @@ impl ZoteroDb {
         }
         items.truncate(limit);
         Ok(items)
+    }
+
+    pub fn duplicate_groups(&self, limit: usize) -> Result<DuplicateGroups> {
+        let mut by_doi = HashMap::<String, Vec<ItemSummary>>::new();
+        let mut by_title = HashMap::<String, Vec<ItemSummary>>::new();
+        for item in self.base_items(usize::MAX)? {
+            if let Some(doi) = item.doi.as_deref().and_then(normalize_doi_key) {
+                by_doi.entry(doi).or_default().push(item.clone());
+            }
+            if let Some(title) = item.title.as_deref().and_then(normalize_title_key) {
+                by_title.entry(title).or_default().push(item);
+            }
+        }
+
+        let mut doi_groups = by_doi
+            .into_iter()
+            .filter(|(_, items)| items.len() > 1)
+            .collect::<Vec<_>>();
+        doi_groups.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut title_groups = by_title
+            .into_iter()
+            .filter(|(_, items)| items.len() > 1)
+            .collect::<Vec<_>>();
+        title_groups.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut groups = Vec::new();
+        let mut claimed = HashSet::<i64>::new();
+        for (doi, items) in doi_groups {
+            let unclaimed = items
+                .into_iter()
+                .filter(|item| !claimed.contains(&item.id))
+                .collect::<Vec<_>>();
+            if unclaimed.len() < 2 {
+                continue;
+            }
+            claimed.extend(unclaimed.iter().map(|item| item.id));
+            groups.push(DuplicateGroup {
+                match_reason: format!("same_doi:{doi}"),
+                items: unclaimed,
+            });
+        }
+        for (_, items) in title_groups {
+            let unclaimed = items
+                .into_iter()
+                .filter(|item| !claimed.contains(&item.id))
+                .collect::<Vec<_>>();
+            if unclaimed.len() < 2 {
+                continue;
+            }
+            claimed.extend(unclaimed.iter().map(|item| item.id));
+            groups.push(DuplicateGroup {
+                match_reason: "same_normalized_title".to_string(),
+                items: unclaimed,
+            });
+        }
+
+        let total_groups = groups.len();
+        groups.truncate(limit);
+        Ok(DuplicateGroups {
+            total_groups,
+            groups,
+        })
     }
 
     pub fn resolve_items(&self, query: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
@@ -701,7 +770,7 @@ impl ZoteroDb {
         prefer_lfz_full_md: bool,
     ) -> Result<MarkdownDocument> {
         let detail = self.get_item(key)?;
-        if prefer_lfz_full_md && config.lfz.enabled.unwrap_or(false) {
+        if prefer_lfz_full_md {
             if let Some(path) = self.find_lfz_full_md(config, &detail)? {
                 let markdown = fs::read_to_string(&path)
                     .with_context(|| format!("failed to read {}", path.display()))?;
@@ -1453,21 +1522,6 @@ fn row_to_base_item(row: &Row<'_>) -> rusqlite::Result<BaseItemRow> {
     })
 }
 
-fn sqlite_readonly_uri(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    let mut escaped = String::with_capacity(raw.len());
-    for byte in raw.bytes() {
-        match byte {
-            b' ' => escaped.push_str("%20"),
-            b'#' => escaped.push_str("%23"),
-            b'?' => escaped.push_str("%3F"),
-            b'%' => escaped.push_str("%25"),
-            _ => escaped.push(byte as char),
-        }
-    }
-    format!("file:{escaped}?mode=ro&immutable=1")
-}
-
 fn sql_value_to_string(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<String>> {
     let value = row.get_ref(index)?;
     Ok(match value {
@@ -1686,6 +1740,26 @@ pub fn extract_extra_citation_key(value: Option<&str>) -> Option<String> {
         }
     }
     None
+}
+
+fn normalize_doi_key(value: &str) -> Option<String> {
+    let normalized = value
+        .trim()
+        .trim_start_matches("https://doi.org/")
+        .trim_start_matches("http://doi.org/")
+        .trim_start_matches("doi:")
+        .trim()
+        .to_lowercase();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn normalize_title_key(value: &str) -> Option<String> {
+    let normalized = value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|ch| ch.is_alphanumeric())
+        .collect::<String>();
+    (normalized.chars().count() > 10).then_some(normalized)
 }
 
 fn render_fallback_markdown(detail: &ItemDetail, extracted: &ExtractedText) -> String {

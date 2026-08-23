@@ -24,7 +24,7 @@ impl Fixture {
         std::fs::create_dir_all(storage.join("ATTACH01"))?;
         std::fs::write(
             storage.join("ATTACH01").join("paper.pdf"),
-            "full text about agent memory and Zotero automation",
+            "%PDF-1.4\nfull text about agent memory and Zotero automation",
         )?;
         std::fs::write(
             storage.join("ATTACH01").join(".zotero-ft-cache"),
@@ -121,7 +121,7 @@ fn doctor_and_web_api_config_are_json_first() -> anyhow::Result<()> {
         .clone();
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["ok"], true);
-    assert_eq!(value["mode"], "local_read_only");
+    assert_eq!(value["mode"], "local_first");
     assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(value["inbox"]["schema"], "paper_candidate/v1");
     assert_eq!(value["inbox"]["discussion_schema"], "paper_discussion/v1");
@@ -144,7 +144,32 @@ fn doctor_and_web_api_config_are_json_first() -> anyhow::Result<()> {
     assert!(text.contains("Runtime"));
     assert!(text.contains("Inbox"));
     assert!(text.contains("Agent skills"));
-    assert!(text.contains("core Zotero access: local read-only"));
+    assert!(text.contains("core Zotero reads: local SQLite"));
+    assert!(text.contains("standard writes: Zotero Local API"));
+    Ok(())
+}
+
+#[test]
+fn local_api_commands_are_explicit_and_dry_run_first() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let doctor = fixture.json(["local-api", "doctor"])?;
+    assert_eq!(doctor["ok"], true);
+    assert_eq!(doctor["enabled"], true);
+    assert!(matches!(
+        doctor["status"].as_str(),
+        Some("unavailable" | "authorization_required" | "available_authorized" | "server_changed")
+    ));
+
+    fixture
+        .cmd()?
+        .args(["local-api", "authorize"])
+        .assert()
+        .failure();
+
+    let preview = fixture.json(["local-api", "authorize", "--dry-run"])?;
+    assert_eq!(preview["ok"], true);
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(preview["will_prompt_in_zotero"], true);
     Ok(())
 }
 
@@ -214,8 +239,10 @@ fn write_commands_preview_without_running_helper() -> anyhow::Result<()> {
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["ok"], true);
     assert_eq!(value["dry_run"], true);
-    assert_eq!(value["helper_required_for_execute"], true);
-    assert_eq!(value["helper_op"], "apply_tags");
+    assert_eq!(value["local_api_required_for_execute"], true);
+    assert_eq!(value["helper_required_for_execute"], false);
+    assert_eq!(value["transport"], "local_api");
+    assert_eq!(value["operation"], "apply_tags");
     assert_eq!(value["preview"]["target"]["key"], "ITEM0001");
 
     let attachment = fixture.storage.join("ATTACH01").join("paper.pdf");
@@ -254,11 +281,77 @@ fn write_commands_preview_without_running_helper() -> anyhow::Result<()> {
     assert_eq!(value["helper_op"], "rename_attachment");
     assert_eq!(value["preview"]["attachment_key"], "ATTACH01");
 
+    let output = fixture
+        .cmd()?
+        .args([
+            "write",
+            "metadata",
+            "ITEM0001",
+            "--set",
+            "shortTitle=Agent Memory Systems",
+            "--clear",
+            "archiveLocation",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["operation"], "update_metadata");
+    assert_eq!(value["transport"], "local_api");
+    assert_eq!(
+        value["params"]["fields"]["shortTitle"],
+        "Agent Memory Systems"
+    );
+    assert_eq!(value["params"]["fields"]["archiveLocation"], "");
+    assert_eq!(value["preview"]["current"]["shortTitle"], "Agent Memory");
+
+    fixture
+        .cmd()?
+        .args([
+            "write",
+            "metadata",
+            "ITEM0001",
+            "--set",
+            "creators=unsafe",
+            "--dry-run",
+        ])
+        .assert()
+        .failure();
+
     fixture
         .cmd()?
         .args(["write", "trash", "ITEM0001"])
         .assert()
         .failure();
+    Ok(())
+}
+
+#[test]
+fn duplicate_finder_prefers_doi_and_avoids_double_counting() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let conn = Connection::open(&fixture.db)?;
+    conn.execute_batch(
+        r#"
+        INSERT INTO items VALUES (5, 1, '2026-04-22 10:00:00', '2026-04-22 10:00:00', 'ITEM0002');
+        INSERT INTO itemDataValues VALUES
+          (9, 'Agent Memory for Research!'),
+          (10, 'https://doi.org/10.1234/EXAMPLE');
+        INSERT INTO itemData VALUES (5, 1, 9), (5, 4, 10);
+        "#,
+    )?;
+    drop(conn);
+
+    let value = fixture.json(["find", "duplicates", "--limit", "10"])?;
+    assert_eq!(value["total_groups"], 1);
+    assert_eq!(value["returned_groups"], 1);
+    assert_eq!(
+        value["groups"][0]["match_reason"],
+        "same_doi:10.1234/example"
+    );
+    assert_eq!(value["groups"][0]["items"].as_array().unwrap().len(), 2);
     Ok(())
 }
 
@@ -498,6 +591,103 @@ fn search_and_item_commands_read_local_fixture() -> anyhow::Result<()> {
         value["markdown"].as_str().unwrap(),
         "# MinerU full markdown\n\nbody"
     );
+    Ok(())
+}
+
+#[test]
+fn read_prepares_a_real_codex_app_pdf_surface() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let output_dir = fixture._dir.path().join("outputs").join("zotero-reader");
+    let output = fixture
+        .cmd()?
+        .arg("read")
+        .arg("lovelace2026AgentMemory")
+        .arg("--output")
+        .arg(&output_dir)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let value: Value = serde_json::from_slice(&output)?;
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["schema"], "zotero_reading_surface/v1");
+    assert_eq!(value["item"]["key"], "ITEM0001");
+    assert_eq!(value["reading"]["primary"], "markdown");
+    assert_eq!(value["reading"]["markdown"]["source"], "zcli_fallback");
+    assert_eq!(value["pdf"]["role"], "visual_preview");
+    assert_eq!(value["pdf"]["mime_type"], "application/pdf");
+    assert_eq!(value["pdf"]["materialization"], "hardlink");
+    let preview = std::path::PathBuf::from(value["pdf"]["preview_path"].as_str().unwrap());
+    assert!(preview.exists());
+    assert_eq!(value["response"]["required_in_paper_reading_final"], true);
+    assert_eq!(value["response"]["repeat_while_same_paper_is_active"], true);
+    assert_eq!(
+        value["response"]["open_pdf_markdown"],
+        value["pdf"]["preview_markdown"]
+    );
+
+    let second = fixture.json(["read", "ITEM0001", "--output", output_dir.to_str().unwrap()])?;
+    assert_eq!(second["pdf"]["materialization"], "existing");
+    Ok(())
+}
+
+#[test]
+fn skill_requires_the_pdf_link_on_initial_and_followup_reading_turns() -> anyhow::Result<()> {
+    let skill = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("skills")
+            .join("zotero-cli")
+            .join("SKILL.md"),
+    )?;
+    assert!(skill.contains("For every final response while the same paper remains active"));
+    assert!(skill.contains("include `response.open_pdf_markdown`"));
+    assert!(skill.contains("on follow-ups"));
+    Ok(())
+}
+
+#[test]
+fn native_markdown_precedes_pdf_even_when_lfz_chat_is_disabled() -> anyhow::Result<()> {
+    let fixture = Fixture::new()?;
+    let mineru_dir = fixture._dir.path().join("llm-for-zotero-mineru").join("2");
+    std::fs::create_dir_all(&mineru_dir)?;
+    let full_md = mineru_dir.join("full.md");
+    std::fs::write(&full_md, "# Native Markdown\n\npreferred body")?;
+    std::fs::write(
+        &fixture.config,
+        format!(
+            "[lfz]\nenabled = false\nzotero_data_dir = \"{}\"\n",
+            fixture._dir.path().display()
+        ),
+    )?;
+
+    let read = fixture.json([
+        "read",
+        "ITEM0001",
+        "--output",
+        fixture
+            ._dir
+            .path()
+            .join("preview-md-first")
+            .to_str()
+            .unwrap(),
+    ])?;
+    assert_eq!(read["reading"]["primary"], "markdown");
+    assert_eq!(
+        read["reading"]["markdown"]["source"],
+        "llm_for_zotero_full_md"
+    );
+    assert_eq!(
+        read["reading"]["markdown"]["source_path"],
+        full_md.display().to_string()
+    );
+
+    let context = fixture.json(["context", "ITEM0001", "--budget", "5k"])?;
+    assert_eq!(context["markdown_meta"]["source"], "llm_for_zotero_full_md");
+    assert!(context["markdown"]
+        .as_str()
+        .unwrap()
+        .contains("preferred body"));
     Ok(())
 }
 
@@ -805,6 +995,12 @@ fn public_command_smoke_outputs_json() -> anyhow::Result<()> {
         vec!["resolve", "Agent Memory"],
         vec!["find", "paper", "memory"],
         vec!["paper", "ITEM0001"],
+        vec![
+            "read",
+            "ITEM0001",
+            "--output",
+            fixture._dir.path().join("preview").to_str().unwrap(),
+        ],
         vec!["context", "ITEM0001", "--budget", "5k"],
         vec!["index", "status"],
         vec!["markdown", "status", "ITEM0001"],
@@ -871,6 +1067,37 @@ fn public_command_smoke_outputs_json() -> anyhow::Result<()> {
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["ok"], true);
     assert_eq!(value["dry_run"], true);
+    Ok(())
+}
+
+#[test]
+fn top_level_help_keeps_primary_workflows_visible_and_advanced_tools_hidden() -> anyhow::Result<()>
+{
+    let fixture = Fixture::new()?;
+    let text = fixture.text(["--help"])?;
+    for command in [
+        "read",
+        "find",
+        "resolve",
+        "context",
+        "index",
+        "item",
+        "import",
+        "write",
+        "inbox",
+        "recap",
+        "lfz",
+        "local-api",
+        "web-api",
+    ] {
+        assert!(text.contains(command), "missing core command: {command}");
+    }
+    for hidden in ["alphaxiv", "mirror", "export", "queue"] {
+        assert!(
+            !text.contains(hidden),
+            "optional command leaked into help: {hidden}"
+        );
+    }
     Ok(())
 }
 
@@ -1257,12 +1484,10 @@ claude_runtime_dir = "/tmp/lfz"
     assert_eq!(value["candidate_schema"], "paper_candidate/v1");
     assert_eq!(value["sources"][0]["name"], "alphaxiv");
 
-    fixture
-        .cmd()?
-        .args(["inbox", "fetch", "agent memory", "--execute"])
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains("read-only candidate preview"));
+    let text = fixture.text(["inbox", "fetch", "--help"])?;
+    assert!(text.contains("--show-seen"));
+    assert!(text.contains("--show-existing"));
+    assert!(text.contains("--no-cache-overview"));
     Ok(())
 }
 

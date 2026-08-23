@@ -1,10 +1,16 @@
 # zcli Helper for Zotero
 
+The helper is the narrow Zotero-native bridge for operations the Zotero 10
+Local API does not provide directly: translators, PDF recognition, linked or
+imported local files, attachment file renaming, and move-to-trash semantics.
+Standard tag, collection-membership, and note writes go through the Zotero 10
+Local API and do not depend on this plugin.
+
 This is an optional Zotero plugin for `zcli`. The CLI remains the public
 interface; users and agents should call `zcli import ...` or `zcli write ...`,
 not this endpoint directly. The helper only exposes a small localhost JSON
-endpoint for local Zotero runtime operations that the Web API and read-only
-SQLite path cannot do cleanly.
+endpoint for Zotero translator and filesystem operations that the Local API
+and read-only SQLite path cannot do cleanly.
 
 The endpoint is `/zcli-helper` on Zotero's local HTTP server. It accepts only
 whitelisted operations, requires the token written to `zcli-helper-token` in the
@@ -34,9 +40,6 @@ Supported operation names:
 
 - `ping`
 - `batch`
-- `apply_tags`
-- `move_to_collection`
-- `create_note`
 - `import_identifiers`
 - `import_pdfs`
 - `import_urls`
@@ -51,6 +54,13 @@ Install from `zcli`:
 zcli helper doctor --format pretty
 zcli helper install --dry-run
 zcli helper install --execute
+```
+
+For standard writes, authorize the Zotero 10 Local API instead:
+
+```sh
+zcli local-api authorize --dry-run
+zcli local-api authorize --execute
 ```
 
 After installing or replacing the XPI, restart Zotero and run

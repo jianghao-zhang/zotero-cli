@@ -2,13 +2,24 @@
 
 Fast local Zotero CLI for paper reading, discovery, import planning, and agent workflows. The npm package is `zotero-cli`; the installed binary is `zcli`.
 
-This project is still a personal-use draft, but the current core loop is usable:
+This project is still evolving, but the current core loop is usable:
 
 ```text
 discover papers -> triage whether they are worth reading -> preview import -> queue/tag -> build reading context
 ```
 
 Core Zotero reads are local-first and do not require Zotero Web API credentials, MCP, an HTTP bridge, or the optional Zotero helper plugin. Networked discovery sources such as alphaXiv, Hugging Face Papers, and X/Bird are explicit opt-in command paths. Zotero mutations and imports are dry-run-first.
+
+## Read In Codex App
+
+```bash
+zcli read "title / citation key / DOI / arXiv / Zotero key / PDF filename" \
+  --output outputs/zotero-reader --format json
+```
+
+`read` makes the paper-reading contract explicit: native `full.md` is the primary agent source, generated Markdown is the fallback, and the local PDF is a visual preview for Codex App. Its output includes a ready-made `response.open_pdf_markdown` link that should remain at the end of every response while the same paper is active.
+
+The PDF is hardlinked by default, so Zotero's original attachment is not modified or duplicated. Use `--copy` explicitly only when the output is on another filesystem volume; there is no silent fallback.
 
 Optional ecosystem links:
 
@@ -32,7 +43,8 @@ Optional ecosystem links:
 | Generate agent context | `zcli context`, `zcli export pack`, installed `zotero-cli` skill |
 | Read recent activity or lfz chats | `zcli recap reading`, `zcli recap lfz`, `zcli lfz turn` |
 | Mirror Zotero to files | `zcli mirror rebuild/sync/watch` |
-| Execute Zotero writes | Optional helper plugin plus explicit `--execute` |
+| Execute Zotero writes | Zotero 10 Local API for tags/collections/notes; helper for translators and files |
+| Validate explicit remote access | `zcli web-api doctor` checks the configured key, library, permissions, and read access without writing |
 
 ## Contents
 
@@ -66,7 +78,7 @@ For local package testing:
 
 ```bash
 npm pack
-npm install -g ./zotero-cli-0.1.0.tgz
+npm install -g ./zotero-cli-0.2.1.tgz
 ```
 
 The npm package is a thin wrapper around the Rust binary. If no packaged `zcli` binary matches the current platform, npm `postinstall` falls back to:
@@ -201,14 +213,14 @@ Output defaults to `auto`:
 
 | Area | Commands | What it does |
 | --- | --- | --- |
-| Health and examples | `doctor`, `examples` | Checks config, local Zotero paths, optional Web API config, helper status, and lfz availability. |
+| Health and examples | `doctor`, `examples` | Checks config, local Zotero paths, Local API, helper status, and lfz availability without using the network. |
 | Config | `setup`, `config init`, `config status`, `config web-api` | Writes and inspects local config. |
-| Resolve and paper surface | `resolve`, `find paper`, `paper`, `context` | Finds an item from natural inputs such as title, short title, citation key, DOI, arXiv, URL, or file path; returns a compact paper view or builds an agent context pack. |
+| Resolve and paper surface | `resolve`, `find paper`, `find duplicates`, `paper`, `context` | Finds an item from natural inputs, detects likely duplicate records locally, returns a compact paper view, or builds an agent context pack. |
 | Search | `search list`, `search grep`, `search context` | Searches metadata/full text and returns matching context. |
 | Local paper index | `index status`, `index update`, `index search`, `index chunks`, `index chunk`, `index get` | Builds a local SQLite FTS5/BM25 sidecar index for repeated fast paper and passage search. No network or model is required. |
 | Unified inbox | `inbox status`, `inbox fetch`, `inbox triage`, `inbox discussion`, `inbox sources x add/list/remove` | Multi-source paper intake from alphaXiv, Hugging Face Papers, and X/Bird. Returns `paper_candidate/v1` and `paper_discussion/v1` surfaces with time semantics, triage, local context match, workflow commands, and dry-run import plans. |
 | Paper discovery | `alphaxiv feed`, `alphaxiv search`, `alphaxiv discover`, `alphaxiv brief`, `alphaxiv paper`, `alphaxiv markdown`, `alphaxiv pdf`, `alphaxiv zotero-plan` | Uses alphaXiv as a public paper discovery/metrics source, with time-window filtering, research triage, and dry-run Zotero import plans. |
-| Item reads | `item get`, `item extract`, `item annotations`, `item notes`, `item attachments`, `item bibtex`, `item markdown` | Reads Zotero item metadata, extracted text, annotations, notes, attachments, BibTeX, and paper Markdown. |
+| Item reads and citations | `item get`, `item extract`, `item annotations`, `item notes`, `item attachments`, `item cite`, `item export`, `item bibtex`, `item markdown` | Reads local item state; formats exact CSL citations and translator exports through Zotero 10 Local API. `item bibtex` remains the lightweight offline approximation. |
 | Markdown status | `markdown status` | Shows whether Markdown will come from lfz MinerU cache or local fallback. |
 | Library browsing | `collection list`, `collection items`, `tags list`, `tags items`, `recent` | Lists collections, tags, tagged items, collection items, and recently touched papers. |
 | Reading queue | `queue add`, `queue list`, `queue done`, `todo list` | Local read-next queue for user and agent workflows. |
@@ -216,11 +228,13 @@ Output defaults to `auto`:
 | lfz drill-down | `lfz doctor`, `lfz turns`, `lfz turn` | Checks lfz tables and retrieves specific question/final-answer turns. |
 | Mirror | `mirror status`, `mirror rebuild`, `mirror sync`, `mirror watch`, `mirror daemon-install` | Generates and maintains a filesystem mirror of the Zotero library. |
 | Paper import | `import arxiv`, `import ids`, `import pdf`, `import url` | Dry-run-first high-level paper import through Zotero native translators, PDF import, and PDF metadata recognition. |
-| Local writes | `write tags`, `write collection`, `write note`, `write attach`, `write rename-attachment`, `write import-files`, `write trash` | Dry-run-first write plans; execution requires the optional Zotero helper plugin. |
+| Local writes | `write tags`, `write collection`, `write note`, `write metadata`, `write attach`, `write rename-attachment`, `write import-files`, `write trash` | Dry-run-first plans; standard writes use Local API, translator/filesystem writes use helper. |
 | UI handoff | `open`, `reveal` | Dry-run-first commands for opening or revealing Zotero items/files. |
 | Agent export | `export pack` | Builds a paper pack for [Codex](https://github.com/openai/codex), [Claude Code](https://code.claude.com/docs), [Hermes Agent](https://github.com/nousresearch/hermes-agent), or [OpenClaw](https://github.com/openclaw/openclaw) style workflows. |
 | Agent skill | `skill doctor`, `skill install` | Installs the optional `zotero-cli` skill into supported agent skill roots. |
-| Helper plugin | `helper doctor`, `helper package`, `helper install` | Packages and installs the optional Zotero runtime helper for writes. |
+| Local API | `local-api doctor`, `local-api authorize` | Authorizes Zotero 10 standard writes without a custom plugin. |
+| Web API | `web-api doctor` | Explicit read-only network probe for the configured key, library ID, permissions, and library access. |
+| Helper plugin | `helper doctor`, `helper package`, `helper install` | Packages the optional translator and filesystem bridge. |
 | Inbox source config | `inbox sources x add/list/remove` | Maintains local public X handles for curated paper-account scans. |
 
 ## Local Library Workflows
@@ -303,7 +317,9 @@ Time filtering is explicit:
 
 ```bash
 zcli inbox status --format json
-zcli inbox fetch "coding agent harness memory" --source alphaxiv --days 30 --date-field any --limit 10 --dry-run --format json
+zcli inbox fetch --source alphaxiv --sort hot --interval "3 Days" --limit 30 --dry-run --format json
+zcli inbox fetch --source alphaxiv --sort hot --interval "3 Days" --limit 30 --execute --format json
+zcli inbox fetch "coding agent harness memory" --source alphaxiv --days 30 --date-field any --limit 20 --dry-run --format json
 zcli inbox fetch --source huggingface --days 3 --date-field any --limit 20 --dry-run --format json
 zcli inbox fetch "coding agent" --source huggingface --days 30 --date-field any --limit 10 --dry-run --format json
 zcli inbox triage "coding agent" --source huggingface --days 30 --code-overview --dry-run --format json
@@ -316,7 +332,11 @@ zcli inbox fetch "agent paper arxiv" --source x --handle paperreadingclub --days
 zcli inbox sources x remove paperreadingclub --format json
 ```
 
-`inbox fetch` currently performs a read-only candidate preview. It calls the selected source adapter, normalizes results into `paper_candidate/v1`, and preserves the raw source record for debugging. Each candidate includes source identifiers, URLs, explicit time fields plus per-source time semantics, metrics/resources/social signals, triage lane/reasons, local context match, workflow commands, and a dry-run Zotero plan when an arXiv ID can be inferred. `inbox triage` is an alias for the same candidate pipeline with the workflow-oriented output. `--execute` is intentionally rejected at this layer; imports and Zotero writes must go through the returned dry-run commands.
+`inbox fetch` calls the selected source adapter, normalizes results into `paper_candidate/v1`, and preserves the raw source record for debugging. Each candidate includes source identifiers, URLs, explicit time fields plus per-source time semantics, metrics/resources/social signals, triage lane/reasons, local context match, workflow commands, and a dry-run Zotero plan when an arXiv ID can be inferred. `inbox triage` is an alias for the same candidate pipeline with the workflow-oriented output.
+
+For alphaXiv, an empty query means feed discovery. Defaults are tuned for daily screening: `--source alphaxiv --sort hot --interval "3 Days" --limit 30`. Returned alphaXiv candidates cache overview markdown under the zcli cache directory with a 7-day TTL so the fast review step can read alphaXiv's own AI overview before any import. `--no-cache-overview` disables that cache.
+
+Duplicate control is local. Candidates already present in Zotero are hidden by default; pass `--show-existing` to inspect them. Candidates already recorded in the inbox seen-state are hidden for 30 days by default; pass `--show-seen` or adjust `--seen-days`. `--execute` at this layer only records the displayed candidates as seen. It does not import papers, write notes, tag items, or touch the reading queue.
 
 Hugging Face uses the public daily papers and paper-search endpoints. With an empty query it returns daily/trending papers over the requested window; with a query it searches Hugging Face Papers and supplements from daily papers when needed. X uses `bird --quote-depth 0`; `zcli inbox sources x add HANDLE` stores curated paper accounts in the normal zcli config, `--source x` reads that list by default, and temporary `--handle` values override the configured list for one fetch. Without configured handles or explicit handles, `--source x` uses Bird search.
 
@@ -334,6 +354,21 @@ zcli item annotations ITEMKEY
 zcli item notes ITEMKEY
 zcli item attachments ITEMKEY
 zcli item bibtex ITEMKEY
+zcli item cite ITEMKEY --style apa
+zcli item cite ITEMKEY --mode citation --style ieee
+zcli item export ITEMKEY --translator bibtex
+zcli find duplicates --limit 20
+```
+
+`item cite` and `item export` use Zotero's own CSL/export engine, so Zotero must
+be running. They are the exact path for publication-ready references and data
+exports. `item bibtex` stays offline-capable but intentionally exposes only the
+small metadata subset available from the local SQLite reader.
+
+Preview a scalar metadata update before executing it:
+
+```bash
+zcli write metadata ITEMKEY --set shortTitle="Short title" --clear archiveLocation --dry-run
 ```
 
 Open local UI/file targets safely:
@@ -345,7 +380,7 @@ zcli reveal ITEMKEY --dry-run
 
 ## Zotero Web API
 
-Core v1 commands stay local-first. Web API config exists so users can save a Zotero online library identity/API key for future sync, remote read, or import workflows.
+Core commands stay local-first. Web API access is explicit: configuration stores the online library identity and key source, while `web-api doctor` performs a read-only network check. No command silently changes from Local API to Web API when Zotero is closed.
 
 Official Zotero API key page: [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
 
@@ -374,7 +409,13 @@ Or store a key from stdin:
 printf '%s' "$ZOTERO_API_KEY" | zcli config web-api --enable --api-key-stdin
 ```
 
-`zcli doctor` reports whether the Web API is configured and whether a key is present, but redacts stored keys. v1 core commands do not use the network.
+`zcli doctor` reports whether the Web API is configured and whether a key is present, but redacts stored keys and does not use the network. Validate the actual key, permissions, library ID, item count, and remote library version explicitly:
+
+```bash
+zcli web-api doctor --format json
+```
+
+This probe performs no writes. With Zotero closed, local SQLite reads remain available, while Local API and helper writes require Zotero to be running. A future remote mutation path must remain explicit rather than becoming an automatic fallback.
 
 ## Recaps
 
@@ -507,9 +548,23 @@ Use `--include-storage` only if storage directory metadata should participate in
 
 ## Optional Zotero Helper Plugin
 
-The helper plugin is optional. It exists only for local Zotero-runtime writes that the read-only SQLite path should not perform. Normal search, item reads, recaps, Markdown, mirror, and agent skill usage do not depend on it.
+The helper plugin is optional. Zotero 10 Local API handles standard tag,
+collection-membership, and note writes. The helper remains for Zotero
+translators, PDF recognition, local-file operations, physical attachment
+renaming, and recoverable move-to-trash semantics. Normal search, item reads,
+recaps, Markdown, mirror, and agent skill usage do not depend on it.
 
-Agents should call `zcli write ...`, not the helper endpoint. `zcli write ... --dry-run` previews locally without starting Zotero or installing the helper. `--execute` requires the helper plugin, Zotero's local HTTP server, and the token file written by the plugin.
+Agents should call `zcli write ...`, not either private endpoint. All writes stay
+dry-run-first. Standard writes require Zotero 10 to be running and one Local API
+authorization:
+
+```bash
+zcli local-api doctor --format pretty
+zcli local-api authorize --dry-run
+zcli local-api authorize --execute
+```
+
+Translator and filesystem operations additionally require the helper plugin.
 
 Helper lifecycle:
 
@@ -541,9 +596,6 @@ Current helper capabilities are whitelisted:
 | Capability | Notes |
 | --- | --- |
 | Paper imports | Import arXiv/DOI/ISBN/PubMed/ADS identifiers, local/remote PDFs, and URLs through Zotero native translator/recognition paths. arXiv has a helper-side Atom metadata/PDF fallback when Zotero returns no item. |
-| Tags | Add/remove tags. |
-| Collections | Add/remove item membership. |
-| Notes | Create child notes. |
 | Attachments | Link/import local files and rename attachments. |
 | Import files | Import local files through Zotero runtime. |
 | Trash | Move Zotero items to trash. |
@@ -596,12 +648,12 @@ The current local CLI path is usable, but these pieces still need work before tr
 
 | Area | Remaining work |
 | --- | --- |
-| Web API smoke and remote mode | Add `zcli web-api doctor` or `zcli web-api ping` to validate auth, library ID, permissions, and read access against Zotero's official API. Current Web API support is configuration-only. |
+| Explicit remote mode | `zcli web-api doctor` now validates the configured key, library ID, permissions, and read access. Any future remote mutation/import commands should remain explicit and dry-run-first. |
 | Semantic index layer | Extend the new local index with optional GGUF embeddings, local reranking, warm daemon mode, and cached query expansion. The current shipped layer is model-free SQLite FTS5/BM25. |
 | Inbox/import pipeline | `zcli inbox fetch` returns alphaXiv, Hugging Face, and X/Bird backed `paper_candidate/v1` previews. `zcli inbox discussion` returns `paper_discussion/v1` for X community context. Next work is stronger local duplicate scoring, profile-based queue/collection/tag handoff, and optional scheduled digest output. |
 | Discovery source adapters | Add arXiv/OpenAlex/Semantic Scholar/RSS/conference feeds behind the same candidate -> import-plan shape. |
 | Mirror watch hardening | Run long-duration `zcli mirror watch` tests, validate CPU/I/O over hours or days, and polish launchd/daemon installation. Current actual write testing covered small rebuilds; full-library sync has been dry-run tested. |
-| Helper execute coverage | Expand real helper tests beyond tag add/remove to notes, collections, file import/link, attachment rename, batch operations, and trash safety. |
+| Execute coverage | Expand real Local API tests beyond tags to notes and collections; expand helper tests for translator imports, file import/link, attachment rename, batch operations, and trash safety. |
 | Cross-environment installs | Test npm package and helper XPI on fresh Zotero 7/8/9 profiles, macOS Intel/ARM, and Linux; verify fallback Cargo builds when no prebuilt native binary is present. |
 | Agent skill installs | Codex, Claude Code, Hermes Agent, and detected [`llm-for-zotero`](https://github.com/yilewang/llm-for-zotero) runtime symlink installs are verified on the primary development machine. Remaining work is fresh-machine validation and OpenClaw install coverage. |
 | Test matrix | Keep adding golden JSON tests for all public commands, fixture SQLite coverage, helper edge-case tests, and package smoke tests for npm release artifacts. |
@@ -611,16 +663,17 @@ Known testing notes:
 | Case | Note |
 | --- | --- |
 | Sandboxed agents | `zcli helper doctor` can report unavailable unless localhost access is allowed. Validate helper status from a normal terminal or with localhost permission. |
-| Real helper writes | Any `--execute` write can update Zotero item modified timestamps even if the visible tag/note state is later restored. |
+| Real writes | Any `--execute` mutation can update Zotero item modified timestamps even if the visible tag, collection, or note state is later restored. |
 
 ## Safety Boundary
 
 | Boundary | Policy |
 | --- | --- |
-| Core local access | Read-only. Reads local Zotero SQLite and storage data. |
-| Network | Not required for core commands. Web API config is optional and redacted in output. |
+| Core local reads | Read-only SQLite and storage access. |
+| Network | Not required for core commands. `web-api doctor` is the explicit read-only network probe; key material remains redacted. |
 | Mutations/imports | Dry-run-first and require an explicit execution flag. |
-| Zotero runtime writes | Routed only through the optional helper plugin. |
+| Standard Zotero writes | Routed through the authenticated Zotero 10 Local API. |
+| Translator/filesystem writes | Routed through the optional helper plugin. |
 | Helper endpoint | Private implementation detail; agents should call `zcli`, not the helper endpoint. |
 
 ## Acknowledgements
