@@ -77,7 +77,11 @@ pub fn doctor(config: &Config) -> Result<Value> {
                 "key_path": key_path,
                 "key_present": stored.is_some(),
                 "key_persistent": stored.as_ref().map(|record| record.remember),
-                "capabilities": ["apply_tags", "move_to_collection", "create_note"],
+                "implemented_operations": ["apply_tags", "move_to_collection", "create_note"],
+                "zotero_10_capabilities": [
+                    "items", "collections", "saved_searches", "tag_delete",
+                    "file_upload", "fulltext_write"
+                ],
             }))
         }
         Err(error) => Ok(json!({
@@ -89,7 +93,11 @@ pub fn doctor(config: &Config) -> Result<Value> {
             "key_path": key_path,
             "key_present": stored.is_some(),
             "error": error.to_string(),
-            "capabilities": ["apply_tags", "move_to_collection", "create_note"],
+            "implemented_operations": ["apply_tags", "move_to_collection", "create_note"],
+            "zotero_10_capabilities": [
+                "items", "collections", "saved_searches", "tag_delete",
+                "file_upload", "fulltext_write"
+            ],
         })),
     }
 }

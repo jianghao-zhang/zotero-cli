@@ -116,17 +116,14 @@ pub enum Commands {
         command: MirrorCommands,
     },
     Setup(SetupArgs),
-    #[command(hide = true)]
     Recap {
         #[command(subcommand)]
         command: RecapCommands,
     },
-    #[command(hide = true)]
     Lfz {
         #[command(subcommand)]
         command: LfzCommands,
     },
-    #[command(hide = true)]
     Inbox {
         #[command(subcommand)]
         command: InboxCommands,
@@ -157,6 +154,10 @@ pub enum Commands {
     LocalApi {
         #[command(subcommand)]
         command: LocalApiCommands,
+    },
+    WebApi {
+        #[command(subcommand)]
+        command: WebApiCommands,
     },
     #[command(hide = true)]
     Alphaxiv {
@@ -963,6 +964,11 @@ pub enum LocalApiCommands {
     Authorize(LocalApiAuthorizeArgs),
 }
 
+#[derive(Debug, Subcommand)]
+pub enum WebApiCommands {
+    Doctor,
+}
+
 #[derive(Debug, Args)]
 pub struct LocalApiAuthorizeArgs {
     #[arg(long)]
@@ -1069,6 +1075,7 @@ pub fn dispatch(cli: &Cli, context: &Context) -> Result<Value> {
         Commands::Skill { command } => dispatch_skill(context, command),
         Commands::Helper { command } => dispatch_helper(context, command),
         Commands::LocalApi { command } => dispatch_local_api(context, command),
+        Commands::WebApi { command } => dispatch_web_api(context, command),
         Commands::Alphaxiv { command } => alphaxiv::dispatch(command, &context.config),
     }
 }
@@ -1094,7 +1101,7 @@ fn doctor(context: &Context) -> Result<Value> {
     let path_zcli_canonical = path_zcli.as_deref().and_then(canonicalize_ok);
     Ok(json!({
         "ok": true,
-        "mode": "local_read_only",
+        "mode": "local_first",
         "version": env!("CARGO_PKG_VERSION"),
         "runtime": {
             "current_exe": current_exe,
@@ -1149,7 +1156,12 @@ fn doctor(context: &Context) -> Result<Value> {
             "http_bridge": false,
             "optional_zotero_helper": true,
             "local_mutations_default": true,
-            "network_required_for_core": false
+            "network_required_for_core": false,
+            "zotero_closed": {
+                "reads": "local_sqlite",
+                "local_writes": "unavailable",
+                "remote_api": "explicit_web_api_only"
+            }
         }
     }))
 }
@@ -1196,6 +1208,7 @@ fn examples() -> Result<Value> {
             {"name": "mirror with paper.md", "command": "zcli --mirror-root ~/ZoteroMirror mirror sync --write-markdown"},
             {"name": "agent skill check", "command": "zcli skill doctor --format pretty"},
             {"name": "Zotero helper plugin check", "command": "zcli helper doctor --format pretty"},
+            {"name": "explicit Zotero Web API check", "command": "zcli web-api doctor --format json"},
             {"name": "export agent pack", "command": "zcli export pack ITEMKEY --for codex --output ./pack --dry-run"},
         ]
     }))
@@ -2248,6 +2261,12 @@ fn dispatch_local_api(context: &Context, command: &LocalApiCommands) -> Result<V
         LocalApiCommands::Authorize(args) => {
             local_api::authorize(&context.config, args.dry_run, args.execute)
         }
+    }
+}
+
+fn dispatch_web_api(context: &Context, command: &WebApiCommands) -> Result<Value> {
+    match command {
+        WebApiCommands::Doctor => crate::web_api::doctor(&context.config),
     }
 }
 

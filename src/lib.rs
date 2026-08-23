@@ -16,6 +16,7 @@ mod paths;
 mod reading;
 mod setup;
 mod skill;
+mod web_api;
 mod zotero;
 
 use anyhow::Result;

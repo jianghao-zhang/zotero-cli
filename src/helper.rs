@@ -92,12 +92,16 @@ pub fn doctor(config: &Config) -> Result<Value> {
             Some(err.to_string()),
             Some(value),
         ),
-        (Some(Err(err)), Err(probe_err)) => (
-            "unavailable",
-            None,
-            Some(format!("{}; {}", err, probe_err)),
-            None,
-        ),
+        (Some(Err(err)), Err(probe_err)) => {
+            let authenticated = err.to_string();
+            let unauthenticated = probe_err.to_string();
+            let message = if authenticated == unauthenticated {
+                authenticated
+            } else {
+                format!("{authenticated}; {unauthenticated}")
+            };
+            ("unavailable", None, Some(message), None)
+        }
         (None, Ok(value)) => ("token_missing", None, None, Some(value)),
         (None, Err(err)) => (
             "not_installed_or_server_unreachable",

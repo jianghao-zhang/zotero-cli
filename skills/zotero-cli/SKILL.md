@@ -12,6 +12,7 @@ Use `zcli` as the direct capability layer for Zotero-backed research work. Do no
 - Prefer `--format json` for agent work.
 - Core reads are local and safe. Imports, writes, and queue/tag handoffs are dry-run-first.
 - Use `--execute` only when the user explicitly asked to perform the write/import in the current turn.
+- Zotero can be closed for local SQLite reads. Local API and helper writes require Zotero to be running. Never silently switch a local operation to the cloud; validate an explicitly requested remote path with `zcli web-api doctor --format json`.
 - Never call Zotero's Local API or helper endpoint directly. For tag, collection, and note writes, check `zcli local-api doctor --format json`. For translator, PDF, file, rename, or trash operations, check `zcli helper doctor --format json`. Then use the normal `zcli write ... --execute` or `zcli import ... --execute` command.
 - If a command returns a Zotero item key after a write/import, verify important metadata with `zcli item get ITEMKEY --format json`.
 
@@ -166,6 +167,7 @@ Check local state:
 zcli doctor --format json
 zcli config status --format text
 zcli skill doctor --format json
+zcli web-api doctor --format json
 ```
 
 Install or refresh the skill:

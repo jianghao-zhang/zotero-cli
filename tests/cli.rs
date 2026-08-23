@@ -121,7 +121,7 @@ fn doctor_and_web_api_config_are_json_first() -> anyhow::Result<()> {
         .clone();
     let value: Value = serde_json::from_slice(&output)?;
     assert_eq!(value["ok"], true);
-    assert_eq!(value["mode"], "local_read_only");
+    assert_eq!(value["mode"], "local_first");
     assert_eq!(value["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(value["inbox"]["schema"], "paper_candidate/v1");
     assert_eq!(value["inbox"]["discussion_schema"], "paper_discussion/v1");
@@ -1005,17 +1005,28 @@ fn public_command_smoke_outputs_json() -> anyhow::Result<()> {
 }
 
 #[test]
-fn top_level_help_keeps_the_reading_path_small() -> anyhow::Result<()> {
+fn top_level_help_keeps_primary_workflows_visible_and_advanced_tools_hidden() -> anyhow::Result<()>
+{
     let fixture = Fixture::new()?;
     let text = fixture.text(["--help"])?;
     for command in [
-        "read", "find", "resolve", "context", "index", "item", "import", "write",
+        "read",
+        "find",
+        "resolve",
+        "context",
+        "index",
+        "item",
+        "import",
+        "write",
+        "inbox",
+        "recap",
+        "lfz",
+        "local-api",
+        "web-api",
     ] {
         assert!(text.contains(command), "missing core command: {command}");
     }
-    for hidden in [
-        "alphaxiv", "inbox", "recap", "mirror", "lfz", "export", "queue",
-    ] {
+    for hidden in ["alphaxiv", "mirror", "export", "queue"] {
         assert!(
             !text.contains(hidden),
             "optional command leaked into help: {hidden}"

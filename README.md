@@ -2,7 +2,7 @@
 
 Fast local Zotero CLI for paper reading, discovery, import planning, and agent workflows. The npm package is `zotero-cli`; the installed binary is `zcli`.
 
-This project is still a personal-use draft, but the current core loop is usable:
+This project is still evolving, but the current core loop is usable:
 
 ```text
 discover papers -> triage whether they are worth reading -> preview import -> queue/tag -> build reading context
@@ -44,6 +44,7 @@ Optional ecosystem links:
 | Read recent activity or lfz chats | `zcli recap reading`, `zcli recap lfz`, `zcli lfz turn` |
 | Mirror Zotero to files | `zcli mirror rebuild/sync/watch` |
 | Execute Zotero writes | Zotero 10 Local API for tags/collections/notes; helper for translators and files |
+| Validate explicit remote access | `zcli web-api doctor` checks the configured key, library, permissions, and read access without writing |
 
 ## Contents
 
@@ -77,7 +78,7 @@ For local package testing:
 
 ```bash
 npm pack
-npm install -g ./zotero-cli-0.1.0.tgz
+npm install -g ./zotero-cli-0.2.1.tgz
 ```
 
 The npm package is a thin wrapper around the Rust binary. If no packaged `zcli` binary matches the current platform, npm `postinstall` falls back to:
@@ -212,7 +213,7 @@ Output defaults to `auto`:
 
 | Area | Commands | What it does |
 | --- | --- | --- |
-| Health and examples | `doctor`, `examples` | Checks config, local Zotero paths, optional Web API config, helper status, and lfz availability. |
+| Health and examples | `doctor`, `examples` | Checks config, local Zotero paths, Local API, helper status, and lfz availability without using the network. |
 | Config | `setup`, `config init`, `config status`, `config web-api` | Writes and inspects local config. |
 | Resolve and paper surface | `resolve`, `find paper`, `paper`, `context` | Finds an item from natural inputs such as title, short title, citation key, DOI, arXiv, URL, or file path; returns a compact paper view or builds an agent context pack. |
 | Search | `search list`, `search grep`, `search context` | Searches metadata/full text and returns matching context. |
@@ -232,6 +233,7 @@ Output defaults to `auto`:
 | Agent export | `export pack` | Builds a paper pack for [Codex](https://github.com/openai/codex), [Claude Code](https://code.claude.com/docs), [Hermes Agent](https://github.com/nousresearch/hermes-agent), or [OpenClaw](https://github.com/openclaw/openclaw) style workflows. |
 | Agent skill | `skill doctor`, `skill install` | Installs the optional `zotero-cli` skill into supported agent skill roots. |
 | Local API | `local-api doctor`, `local-api authorize` | Authorizes Zotero 10 standard writes without a custom plugin. |
+| Web API | `web-api doctor` | Explicit read-only network probe for the configured key, library ID, permissions, and library access. |
 | Helper plugin | `helper doctor`, `helper package`, `helper install` | Packages the optional translator and filesystem bridge. |
 | Inbox source config | `inbox sources x add/list/remove` | Maintains local public X handles for curated paper-account scans. |
 
@@ -363,7 +365,7 @@ zcli reveal ITEMKEY --dry-run
 
 ## Zotero Web API
 
-Core v1 commands stay local-first. Web API config exists so users can save a Zotero online library identity/API key for future sync, remote read, or import workflows.
+Core commands stay local-first. Web API access is explicit: configuration stores the online library identity and key source, while `web-api doctor` performs a read-only network check. No command silently changes from Local API to Web API when Zotero is closed.
 
 Official Zotero API key page: [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
 
@@ -392,7 +394,13 @@ Or store a key from stdin:
 printf '%s' "$ZOTERO_API_KEY" | zcli config web-api --enable --api-key-stdin
 ```
 
-`zcli doctor` reports whether the Web API is configured and whether a key is present, but redacts stored keys. v1 core commands do not use the network.
+`zcli doctor` reports whether the Web API is configured and whether a key is present, but redacts stored keys and does not use the network. Validate the actual key, permissions, library ID, item count, and remote library version explicitly:
+
+```bash
+zcli web-api doctor --format json
+```
+
+This probe performs no writes. With Zotero closed, local SQLite reads remain available, while Local API and helper writes require Zotero to be running. A future remote mutation path must remain explicit rather than becoming an automatic fallback.
 
 ## Recaps
 
@@ -625,7 +633,7 @@ The current local CLI path is usable, but these pieces still need work before tr
 
 | Area | Remaining work |
 | --- | --- |
-| Web API smoke and remote mode | Add `zcli web-api doctor` or `zcli web-api ping` to validate auth, library ID, permissions, and read access against Zotero's official API. Current Web API support is configuration-only. |
+| Explicit remote mode | `zcli web-api doctor` now validates the configured key, library ID, permissions, and read access. Any future remote mutation/import commands should remain explicit and dry-run-first. |
 | Semantic index layer | Extend the new local index with optional GGUF embeddings, local reranking, warm daemon mode, and cached query expansion. The current shipped layer is model-free SQLite FTS5/BM25. |
 | Inbox/import pipeline | `zcli inbox fetch` returns alphaXiv, Hugging Face, and X/Bird backed `paper_candidate/v1` previews. `zcli inbox discussion` returns `paper_discussion/v1` for X community context. Next work is stronger local duplicate scoring, profile-based queue/collection/tag handoff, and optional scheduled digest output. |
 | Discovery source adapters | Add arXiv/OpenAlex/Semantic Scholar/RSS/conference feeds behind the same candidate -> import-plan shape. |
@@ -647,7 +655,7 @@ Known testing notes:
 | Boundary | Policy |
 | --- | --- |
 | Core local reads | Read-only SQLite and storage access. |
-| Network | Not required for core commands. Web API config is optional and redacted in output. |
+| Network | Not required for core commands. `web-api doctor` is the explicit read-only network probe; key material remains redacted. |
 | Mutations/imports | Dry-run-first and require an explicit execution flag. |
 | Standard Zotero writes | Routed through the authenticated Zotero 10 Local API. |
 | Translator/filesystem writes | Routed through the optional helper plugin. |

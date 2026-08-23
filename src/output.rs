@@ -23,13 +23,14 @@ pub fn print_value(value: &Value, format: OutputFormat) -> Result<()> {
 }
 
 fn print_text(value: &Value) {
-    let renderers: [fn(&Value) -> bool; 10] = [
+    let renderers: [fn(&Value) -> bool; 11] = [
         print_read,
         print_doctor,
         print_config_status,
         print_setup,
         print_helper,
         print_local_api,
+        print_web_api,
         print_write,
         print_mirror_status,
         print_examples,
@@ -213,7 +214,7 @@ fn print_config_status(value: &Value) -> bool {
 }
 
 fn print_doctor(value: &Value) -> bool {
-    if value.get("mode").and_then(Value::as_str) != Some("local_read_only") {
+    if value.get("mode").and_then(Value::as_str) != Some("local_first") {
         return false;
     }
 
@@ -607,6 +608,34 @@ fn print_local_api(value: &Value) -> bool {
     if value.get("will_prompt_in_zotero").and_then(Value::as_bool) == Some(true) {
         println!("  next: zcli local-api authorize --execute");
     }
+    true
+}
+
+fn print_web_api(value: &Value) -> bool {
+    if value.get("network_used").is_none()
+        || value.get("writes_executed").is_none()
+        || value.get("library_type").is_none()
+    {
+        return false;
+    }
+    println!("Zotero Web API");
+    println!(
+        "  status: {}",
+        value
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+    );
+    if let Some(endpoint) = value.get("library_endpoint").and_then(Value::as_str) {
+        println!("  library: {endpoint}");
+    }
+    if let Some(total) = value.get("total_results").and_then(Value::as_u64) {
+        println!("  items: {total}");
+    }
+    if let Some(error) = value.get("error").and_then(Value::as_str) {
+        println!("  error: {error}");
+    }
+    println!("  writes executed: no");
     true
 }
 
