@@ -1,6 +1,6 @@
 var ZcliHelper = {
   endpointPath: "/zcli-helper",
-  version: "0.2.0",
+  version: "0.2.1",
   protocolVersion: 2,
   notifierID: "zcli-helper",
   token: null,
@@ -522,77 +522,61 @@ var ZcliHelper = {
     throw new Error("unsupported identifier object");
   },
 
-  xmlFirst(parent, localName) {
-    if (!parent) return null;
-    if (parent.getElementsByTagNameNS) {
-      var nsNodes = parent.getElementsByTagNameNS("*", localName);
-      if (nsNodes && nsNodes.length) return nsNodes[0];
-    }
-    var nodes = parent.getElementsByTagName(localName);
-    return nodes && nodes.length ? nodes[0] : null;
-  },
-
-  xmlText(parent, localName) {
-    var node = this.xmlFirst(parent, localName);
-    return node && node.textContent ? node.textContent.replace(/\s+/g, " ").trim() : "";
-  },
-
-  xmlTexts(parent, localName) {
-    if (!parent) return [];
-    var nodes = parent.getElementsByTagNameNS
-      ? parent.getElementsByTagNameNS("*", localName)
-      : parent.getElementsByTagName(localName);
-    return Array.from(nodes || [])
-      .map((node) => (node.textContent || "").replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-  },
-
   async fetchArxivMetadata(arxivID) {
-    var url = "https://export.arxiv.org/api/query?id_list=" + encodeURIComponent(arxivID);
-    var response = await Zotero.HTTP.request("GET", url, { timeout: 60000 });
-    var text = response.responseText || response.response || "";
-    var doc = new DOMParser().parseFromString(text, "application/xml");
-    var entry = this.xmlFirst(doc, "entry");
-    if (!entry) throw new Error("arXiv API returned no entry for " + arxivID);
-
-    var idURL = this.xmlText(entry, "id");
-    var match = idURL.match(/arxiv\.org\/abs\/([^/?#]+)/i);
-    var normalizedID = match ? match[1] : arxivID;
-    var links = entry.getElementsByTagNameNS
-      ? entry.getElementsByTagNameNS("*", "link")
-      : entry.getElementsByTagName("link");
-    var pdfURL = "";
-    for (var link of Array.from(links || [])) {
-      if (String(link.getAttribute("title") || "").toLowerCase() === "pdf" || String(link.getAttribute("type") || "").toLowerCase() === "application/pdf") {
-        pdfURL = link.getAttribute("href") || "";
-        break;
+    var url = "https://arxiv.org/abs/" + arxivID;
+    var response;
+    try {
+      response = await Zotero.HTTP.request("GET", url, {
+        responseType: "document",
+        timeout: 30000,
+        errorDelayMax: 0,
+        noRetryOnThrottle: true,
+      });
+    } catch (error) {
+      var status = error && (error.status || (error.xmlhttp && error.xmlhttp.status));
+      if (Number(status) === 429) {
+        throw new Error("arXiv paper page for " + arxivID + " was rate limited (HTTP 429). No item was created for this identifier. Wait before retrying.");
       }
+      throw new Error("arXiv paper page for " + arxivID + " failed" + (status ? " (HTTP " + status + ")" : "") + ": " + (error && error.message ? error.message : String(error)));
     }
-    if (!pdfURL) pdfURL = "https://arxiv.org/pdf/" + normalizedID;
+    return this.parseArxivMetadata(response.response, arxivID);
+  },
 
-    var categories = [];
-    var categoryNodes = entry.getElementsByTagNameNS
-      ? entry.getElementsByTagNameNS("*", "category")
-      : entry.getElementsByTagName("category");
-    for (var category of Array.from(categoryNodes || [])) {
-      var term = category.getAttribute("term");
-      if (term && !categories.includes(term)) categories.push(term);
+  parseArxivMetadata(doc, arxivID) {
+    // Highwire citation metadata is published on the official abstract page.
+    // Requiring the matching identifier avoids importing error/challenge pages.
+    var metadata = {};
+    for (var node of doc.querySelectorAll("meta[name][content]")) {
+      var name = node.getAttribute("name").toLowerCase();
+      var content = node.getAttribute("content").replace(/\s+/g, " ").trim();
+      if (content) (metadata[name] || (metadata[name] = [])).push(content);
     }
-
+    var first = (name) => (metadata[name] || [])[0] || "";
+    var id = first("citation_arxiv_id");
+    var title = first("citation_title");
+    var authors = metadata.citation_author || [];
+    if (!id || id.replace(/v[0-9]+$/i, "").toLowerCase() !== arxivID.replace(/v[0-9]+$/i, "").toLowerCase()
+        || !title || !authors.length) {
+      throw new Error("arXiv page is missing valid citation metadata for " + arxivID + "; no item was created");
+    }
+    // Keep an explicitly requested version in both the item and its PDF URL.
+    var normalizedID = /v[0-9]+$/i.test(arxivID) ? arxivID : id;
+    var subjects = doc.querySelector(".subjects");
+    var categories = subjects ? Array.from(subjects.textContent.matchAll(/\(([a-z-]+(?:\.[A-Z]+)?)\)/g), (match) => match[1]) : [];
     return {
       arxivID: normalizedID,
-      title: this.xmlText(entry, "title"),
-      abstractNote: this.xmlText(entry, "summary"),
-      date: (this.xmlText(entry, "published") || this.xmlText(entry, "updated")).slice(0, 10),
-      authors: this.xmlTexts(entry, "name"),
-      doi: this.xmlText(entry, "doi"),
+      title,
+      abstractNote: first("citation_abstract"),
+      date: first("citation_date").replace(/\//g, "-"),
+      authors,
+      doi: first("citation_doi"),
       url: "https://arxiv.org/abs/" + normalizedID,
-      pdfURL,
-      categories,
+      pdfURL: "https://arxiv.org/pdf/" + normalizedID,
+      categories: Array.from(new Set(categories)),
     };
   },
 
-  async importArxivFallback(identifier, libraryID, collections, tags, saveAttachments, compact) {
+  async importArxiv(identifier, libraryID, collections, tags, saveAttachments, compact) {
     var meta = await this.fetchArxivMetadata(identifier.value);
     var itemType = Zotero.ItemTypes.getID("preprint") ? "preprint" : "journalArticle";
     var item = new Zotero.Item(itemType);
@@ -604,6 +588,7 @@ var ZcliHelper = {
     this.safeSetField(item, "DOI", meta.doi);
     this.safeSetField(item, "archive", "arXiv");
     this.safeSetField(item, "archiveLocation", meta.arxivID);
+    this.safeSetField(item, "archiveID", meta.arxivID);
     this.safeSetField(item, "repository", "arXiv");
     var extra = ["arXiv: " + meta.arxivID];
     if (meta.categories.length) extra.push("arXiv categories: " + meta.categories.join(", "));
@@ -611,7 +596,7 @@ var ZcliHelper = {
     if (meta.authors.length) {
       item.setCreators(
         meta.authors.map((name) => {
-          var creator = Zotero.Utilities.cleanAuthor(name, "author", false);
+          var creator = Zotero.Utilities.cleanAuthor(name, "author", name.includes(","));
           creator.creatorType = "author";
           return creator;
         }),
@@ -639,7 +624,7 @@ var ZcliHelper = {
         });
       }
     }
-    return { item, attachments, source: "arxiv_api_fallback" };
+    return { item, attachments, source: "arxiv_page" };
   },
 
   async existingItemsForIdentifier(identifier, libraryID, compact) {
@@ -691,28 +676,30 @@ var ZcliHelper = {
         results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "would_import" });
         continue;
       }
+      if (identifier.kind === "arxiv") {
+        // Read the official paper page directly; the separate metadata API
+        // can be unavailable even when the paper and PDF are accessible.
+        try {
+          var imported = await this.importArxiv(identifier, libraryID, collections, tags, saveAttachments, compact);
+          results.push({
+            input: identifier.input,
+            kind: identifier.kind,
+            value: identifier.value,
+            status: "imported",
+            source: imported.source,
+            items: [this.importResultItem(imported.item, null, compact)],
+            attachments: imported.attachments,
+          });
+        } catch (error) {
+          results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "error", error: error && error.message ? error.message : String(error) });
+        }
+        continue;
+      }
       var translate = new Zotero.Translate.Search();
       translate.setIdentifier(identifier.zotero);
       var translators = await translate.getTranslators();
       if (!translators.length) {
-        if (identifier.kind === "arxiv") {
-          try {
-            var fallback = await this.importArxivFallback(identifier, libraryID, collections, tags, saveAttachments, compact);
-            results.push({
-              input: identifier.input,
-              kind: identifier.kind,
-              value: identifier.value,
-              status: "imported",
-              source: fallback.source,
-              items: [this.importResultItem(fallback.item, null, compact)],
-              attachments: fallback.attachments,
-            });
-          } catch (error) {
-            results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "error", error: error && error.message ? error.message : String(error) });
-          }
-        } else {
-          results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "no_translator" });
-        }
+        results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "no_translator" });
         continue;
       }
       translate.setTranslator(translators);
@@ -721,34 +708,6 @@ var ZcliHelper = {
       try {
         items = await translate.translate({ libraryID, collections, saveAttachments });
       } catch (error) {
-        if (identifier.kind === "arxiv") {
-          try {
-            var fallbackImport = await this.importArxivFallback(identifier, libraryID, collections, tags, saveAttachments, compact);
-            items = [fallbackImport.item];
-            source = fallbackImport.source;
-            results.push({
-              input: identifier.input,
-              kind: identifier.kind,
-              value: identifier.value,
-              status: "imported",
-              source,
-              translator_error: error && error.message ? error.message : String(error),
-              items: items.map((item) => this.importResultItem(item, null, compact)),
-              attachments: fallbackImport.attachments,
-            });
-            continue;
-          } catch (fallbackError) {
-            results.push({
-              input: identifier.input,
-              kind: identifier.kind,
-              value: identifier.value,
-              status: "error",
-              error: error && error.message ? error.message : String(error),
-              fallback_error: fallbackError && fallbackError.message ? fallbackError.message : String(fallbackError),
-            });
-            continue;
-          }
-        }
         results.push({ input: identifier.input, kind: identifier.kind, value: identifier.value, status: "error", error: error && error.message ? error.message : String(error) });
         continue;
       }
@@ -764,7 +723,14 @@ var ZcliHelper = {
         items: items.map((item) => this.importResultItem(item, null, compact)),
       });
     }
-    return { ok: true, op: "import_identifiers", dry_run: dryRun, compact, count: results.length, items: results };
+    return this.importResponse("import_identifiers", results, dryRun, compact);
+  },
+
+  importResponse(op, items, dryRun, compact) {
+    var errors = items.filter((item) => item.status === "error");
+    var result = { ok: errors.length === 0, op, dry_run: dryRun, compact, count: items.length, items };
+    if (errors.length) result.error = errors.map((item) => item.error).join("; ");
+    return result;
   },
 
   async importPdfs(params, dryRun, compact) {
@@ -828,7 +794,7 @@ var ZcliHelper = {
       }
       results.push(await this.importWebUrl(url, libraryID, collections, tags, compact));
     }
-    return { ok: true, op: "import_urls", dry_run: dryRun, compact, count: results.length, items: results };
+    return this.importResponse("import_urls", results, dryRun, compact);
   },
 
   isProbablyPdfUrl(url) {

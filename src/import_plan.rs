@@ -71,7 +71,7 @@ pub fn identifiers(
             "tags": options.tags,
             "allow_duplicates": options.allow_duplicates,
             "duplicate_check": duplicate_check_label(db),
-            "zotero_native_path": "Zotero.Translate.Search / Add Item by Identifier",
+            "zotero_native_path": "arXiv: official paper page + Zotero attachments; other IDs: Zotero.Translate.Search",
             "execute_command": format!("zcli import {command_name} <identifiers...> --execute"),
         }),
     )
@@ -203,7 +203,7 @@ pub fn urls(
                 "tags": options.tags,
                 "allow_duplicates": options.allow_duplicates,
                 "duplicate_check": duplicate_check_label(db),
-                "zotero_native_path": "identifier translator, PDF import/recognition, or web translator fallback",
+                "zotero_native_path": "identifier importer, PDF import/recognition, or web translator fallback",
                 "execute_command": "zcli import url <urls...> --execute",
             }),
         )

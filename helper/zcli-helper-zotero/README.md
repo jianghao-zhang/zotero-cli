@@ -28,8 +28,10 @@ Fast-mode behavior:
 - compact responses by default
 - storage checks only for attachment/file operations
 - `batch` op for multiple whitelisted writes in one localhost round trip
-- arXiv imports try Zotero translators first and fall back to arXiv Atom
-  metadata plus PDF attachment when Zotero returns no item
+- arXiv imports use the official arXiv abstract page citation metadata plus PDF attachment, with a
+  30-second page timeout and no automatic retries on throttling/server errors
+- DOI and other identifiers continue to use Zotero search translators
+- failed identifier/URL imports return `ok: false` with the upstream error
 
 `zcli` owns import planning and mutation safety. The helper receives only
 validated helper payloads after `zcli import ... --dry-run` or

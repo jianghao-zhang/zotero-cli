@@ -24,7 +24,7 @@
     "package-native": "node npm/scripts/package-native.js",
     "prepack": "cargo build --release --bin zcli && node npm/scripts/package-native.js",
     "postinstall": "node npm/scripts/postinstall.js",
-    "test": "cargo test && node npm/tests/smoke.js && node npm/tests/helper-fast.js",
+    "test": "cargo test && node npm/tests/smoke.js && node npm/tests/helper-fast.js && node npm/tests/helper-import.js",
     "pack:dry-run": "npm pack --dry-run --json"
   },
   "engines": {

@@ -406,7 +406,16 @@ fn helper_request(
         )?;
     }
     let mut response = String::new();
-    stream.read_to_string(&mut response)?;
+    stream.read_to_string(&mut response).map_err(|error| {
+        if matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) {
+            anyhow!(
+                "timed out after {}s waiting for the Zotero helper response; the operation may still be running in Zotero. Check the library before retrying to avoid duplicate writes",
+                timeout.as_secs_f64()
+            )
+        } else {
+            anyhow!("failed to read the Zotero helper response: {error}")
+        }
+    })?;
     parse_helper_response(&response)
 }
 
@@ -482,6 +491,32 @@ fn parse_http_endpoint(endpoint: &str) -> Result<HttpTarget> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn helper_timeout_explains_uncertain_operation_state() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            // Keep the connection open without a response, as a stalled helper does.
+            std::thread::sleep(Duration::from_millis(150));
+        });
+        let error = helper_request(
+            &format!("http://{address}/zcli-helper"),
+            "POST",
+            Some(json!({"op": "ping"})),
+            Duration::from_millis(30),
+        )
+        .unwrap_err();
+        server.join().unwrap();
+        assert!(error.to_string().contains("timed out"));
+        assert!(error.to_string().contains("may still be running"));
+        assert!(error
+            .to_string()
+            .contains("Check the library before retrying"));
+    }
 
     #[test]
     fn parse_helper_response_rejects_non_2xx_status() {
